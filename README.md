@@ -1,5 +1,7 @@
 ﻿# Discord Conversation Processor
 
+[![Release](https://img.shields.io/github/v/release/DrMemoryFish/ChatForge)](https://github.com/DrMemoryFish/ChatForge/releases)
+
 A production‑grade desktop app that unifies Discord conversation export, processing, and preview into a single workflow. It replaces multi‑tool manual steps with one cohesive, secure UI.
 
 ## Highlights
@@ -167,6 +169,17 @@ This app uses a Discord **user token**. Only use your own account and handle it 
 - UI: `app/ui/`
 - Core services: `app/core/`
 - Workers (async threads): `app/workers/`
+
+## License
+MIT License. See `LICENSE`.
+
+## Releases
+Creating a tag like `v1.0.0` triggers the GitHub Actions release workflow.
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
 
 ---
 

@@ -1,0 +1,52 @@
+﻿name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\Activate.ps1
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes
+
+      - name: Build portable EXE
+        shell: pwsh
+        run: .\packaging\build_portable.ps1
+
+      - name: Build installer EXE
+        shell: pwsh
+        env:
+          INNO_SETUP_COMPILER: C:\Program Files (x86)\Inno Setup 6\ISCC.exe
+        run: .\packaging\build_installer.ps1
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/DiscordConversationProcessor.exe
+            dist_installer/DiscordConversationProcessorSetup.exe
