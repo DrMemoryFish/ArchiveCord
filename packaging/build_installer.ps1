@@ -2,7 +2,23 @@
 
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $iss = Join-Path $PSScriptRoot "installer\DiscordConversationProcessor.iss"
-$portableExe = Join-Path $root "dist\DiscordConversationProcessor.exe"
+$version = $env:RELEASE_VERSION
+if (-not $version) {
+    try {
+        $tag = (git describe --tags --abbrev=0) 2>$null
+        if ($tag) {
+            $version = $tag -replace '^v', ''
+        }
+    } catch {
+        $version = $null
+    }
+}
+if (-not $version) {
+    throw "Release version not set. Set RELEASE_VERSION or create a tag like v1.0.0."
+}
+
+$portableExeName = "ChatForge-v$version-win64-portable.exe"
+$portableExe = Join-Path $root ("dist\" + $portableExeName)
 
 if (-not (Test-Path $iss)) {
     throw "Inno Setup script not found: $iss"
@@ -10,6 +26,7 @@ if (-not (Test-Path $iss)) {
 
 if (-not (Test-Path $portableExe)) {
     Write-Host "Portable EXE not found. Building it first..."
+    $env:RELEASE_VERSION = $version
     & (Join-Path $PSScriptRoot "build_portable.ps1")
 }
 
@@ -22,6 +39,6 @@ if (-not (Test-Path $compiler)) {
     throw "Inno Setup compiler not found. Set INNO_SETUP_COMPILER or install Inno Setup 6."
 }
 
-& $compiler $iss
+& $compiler /DMyAppVersion=$version $iss
 
 Write-Host "Installer build complete. Check dist_installer\\ for output."

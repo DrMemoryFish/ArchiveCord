@@ -1,16 +1,16 @@
 ﻿#define MyAppName "Discord Conversation Processor"
-#define MyAppExeName "DiscordConversationProcessor.exe"
-#define MyAppVersion "1.0.0"
+#define MyAppExeName "ChatForge-v{#MyAppVersion}-win64-portable.exe"
+#define MyAppVersion "0.0.0"
 #define MyAppId "9C6E6E8A-9E2C-4A9E-8B90-76B7D7D3B7E2"
 
 [Setup]
-AppId={#MyAppId}
+AppId={{#MyAppId}}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppName}
 DefaultDirName={commonpf}\Discord Conversation Processor
 DefaultGroupName={#MyAppName}
-OutputBaseFilename=DiscordConversationProcessorSetup
+OutputBaseFilename=ChatForge-v{#MyAppVersion}-win64-setup
 OutputDir=..\..\dist_installer
 SetupIconFile=..\..\exe\app_logo.ico
 Compression=lzma2
@@ -26,15 +26,15 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; Flags: unchecked
 Name: "uninstallentry"; Description: "Create an &Uninstall entry"; Flags: checkedonce
 
 [Files]
-Source: "..\..\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\{#MyAppExeName}"; DestDir: "{app}"; DestName: "ChatForge.exe"; Flags: ignoreversion
 Source: "..\..\exe\app_logo.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: startmenuicon; IconFilename: "{app}\app_logo.ico"
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon; IconFilename: "{app}\app_logo.ico"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\ChatForge.exe"; Tasks: startmenuicon; IconFilename: "{app}\app_logo.ico"
+Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\ChatForge.exe"; Tasks: desktopicon; IconFilename: "{app}\app_logo.ico"
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\ChatForge.exe"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);

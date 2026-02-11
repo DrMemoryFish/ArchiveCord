@@ -16,6 +16,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set release version
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -36,17 +42,21 @@ jobs:
 
       - name: Build portable EXE
         shell: pwsh
-        run: .\packaging\build_portable.ps1
+        run: |
+          $env:RELEASE_VERSION = $env:RELEASE_VERSION
+          .\packaging\build_portable.ps1
 
       - name: Build installer EXE
         shell: pwsh
         env:
           INNO_SETUP_COMPILER: C:\Program Files (x86)\Inno Setup 6\ISCC.exe
-        run: .\packaging\build_installer.ps1
+        run: |
+          $env:RELEASE_VERSION = $env:RELEASE_VERSION
+          .\packaging\build_installer.ps1
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/DiscordConversationProcessor.exe
-            dist_installer/DiscordConversationProcessorSetup.exe
+            dist/ChatForge-v${{ env.RELEASE_VERSION }}-win64-portable.exe
+            dist_installer/ChatForge-v${{ env.RELEASE_VERSION }}-win64-setup.exe

@@ -13,8 +13,25 @@ if (-not (Test-Path $icon)) {
     throw "Icon not found: $icon"
 }
 
+$version = $env:RELEASE_VERSION
+if (-not $version) {
+    try {
+        $tag = (git describe --tags --abbrev=0) 2>$null
+        if ($tag) {
+            $version = $tag -replace '^v', ''
+        }
+    } catch {
+        $version = $null
+    }
+}
+if (-not $version) {
+    throw "Release version not set. Set RELEASE_VERSION or create a tag like v1.0.0."
+}
+
+$exeName = "ChatForge-v$version-win64-portable"
+
 & $venvPython -m PyInstaller --noconfirm --clean --onefile --windowed `
-    --name "DiscordConversationProcessor" `
+    --name "$exeName" `
     --icon "$icon" `
     --add-data "$icon;exe" `
     app\main.py
@@ -23,4 +40,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "PyInstaller failed with exit code $LASTEXITCODE. Install it with: pip install -r requirements-dev.txt"
 }
 
-Write-Host "Portable build complete: $root\dist\DiscordConversationProcessor.exe"
+Write-Host "Portable build complete: $root\dist\$exeName.exe"

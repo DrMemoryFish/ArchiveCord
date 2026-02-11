@@ -45,7 +45,7 @@ Build the portable EXE:
 ```
 
 Output:
-- `dist/DiscordConversationProcessor.exe`
+- `dist/ChatForge-v<version>-win64-portable.exe`
 
 ### 2) Installer EXE (Inno Setup)
 Install **Inno Setup 6** and ensure `ISCC.exe` is available.  
@@ -60,7 +60,7 @@ Build the installer:
 ```
 
 Output:
-- `dist_installer/DiscordConversationProcessorSetup.exe`
+- `dist_installer/ChatForge-v<version>-win64-setup.exe`
 
 ### Icon Replacement
 The application icon is sourced from:
@@ -160,6 +160,8 @@ This app uses a Discord **user token**. Only use your own account and handle it 
   Paste only the raw token (no extra whitespace or console output).
 - **“Token invalid” or 401 errors**
   The token is incorrect or expired.
+- **Windows warns on first run**
+  The portable/installer EXEs are not code‑signed yet, so Windows SmartScreen may show a warning. This is expected for unsigned builds.
 - **Rate limiting**
   The app automatically retries after Discord’s `retry_after` delay.
 - **Missing channels**
@@ -180,6 +182,11 @@ Creating a tag like `v1.0.0` triggers the GitHub Actions release workflow.
 git tag v1.0.0
 git push origin v1.0.0
 ```
+
+## Release Process
+1. Create a version tag (for example `v1.0.1`).
+2. Push the tag to GitHub.
+3. GitHub Actions builds the portable and setup EXEs and publishes them as Release assets.
 
 ---
 
