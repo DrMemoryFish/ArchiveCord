@@ -1,0 +1,11 @@
+﻿__pycache__/
+*.pyc
+.venv/
+.env
+output/
+exports/
+logs/
+build/
+dist/
+dist_installer/
+*.spec
