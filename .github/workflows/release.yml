@@ -58,5 +58,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/ChatForge-v${{ env.RELEASE_VERSION }}-win64-portable.exe
-            dist_installer/ChatForge-v${{ env.RELEASE_VERSION }}-win64-setup.exe
+            dist/ArchiveCord-v${{ env.RELEASE_VERSION }}-win64-portable.exe
+            dist_installer/ArchiveCord-v${{ env.RELEASE_VERSION }}-win64-setup.exe

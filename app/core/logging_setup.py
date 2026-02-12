@@ -27,7 +27,7 @@ def setup_logging(log_dir: str = "logs") -> Optional[LoggingController]:
         return None
 
     ensure_dir(log_dir)
-    log_path = os.path.join(log_dir, "discordsorter.log")
+    log_path = os.path.join(log_dir, "archivecord.log")
 
     formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
 

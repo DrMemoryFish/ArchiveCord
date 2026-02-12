@@ -28,7 +28,7 @@ if (-not $version) {
     throw "Release version not set. Set RELEASE_VERSION or create a tag like v1.0.0."
 }
 
-$exeName = "ChatForge-v$version-win64-portable"
+$exeName = "ArchiveCord-v$version-win64-portable"
 
 & $venvPython -m PyInstaller --noconfirm --clean --onefile --windowed `
     --name "$exeName" `

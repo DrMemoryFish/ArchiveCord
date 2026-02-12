@@ -39,7 +39,7 @@ from app.workers.export_worker import ExportWorker
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Discord Conversation Processor")
+        self.setWindowTitle("ArchiveCord")
         self.resize(1280, 820)
         self.setMinimumSize(1100, 720)
 

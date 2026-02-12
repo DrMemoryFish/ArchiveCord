@@ -17,7 +17,7 @@ if (-not $version) {
     throw "Release version not set. Set RELEASE_VERSION or create a tag like v1.0.0."
 }
 
-$portableExeName = "ChatForge-v$version-win64-portable.exe"
+$portableExeName = "ArchiveCord-v$version-win64-portable.exe"
 $portableExe = Join-Path $root ("dist\" + $portableExeName)
 
 if (-not (Test-Path $iss)) {

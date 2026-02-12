@@ -1,9 +1,9 @@
-#define MyAppName "Discord Conversation Processor"
+#define MyAppName "ArchiveCord"
 #ifndef MyAppVersion
 #define MyAppVersion "0.0.0"
 #endif
-#define MyAppExeName "ChatForge-v" + MyAppVersion + "-win64-portable.exe"
-#define MySetupBase "ChatForge-v" + MyAppVersion + "-win64-setup"
+#define MyAppExeName "ArchiveCord-v" + MyAppVersion + "-win64-portable.exe"
+#define MySetupBase "ArchiveCord-v" + MyAppVersion + "-win64-setup"
 #define MyAppId "9C6E6E8A-9E2C-4A9E-8B90-76B7D7D3B7E2"
 #define MyAppIdBraced "{{" + MyAppId + "}}"
 
@@ -12,7 +12,7 @@ AppId={#MyAppIdBraced}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppName}
-DefaultDirName={commonpf}\Discord Conversation Processor
+DefaultDirName={commonpf}\ArchiveCord
 DefaultGroupName={#MyAppName}
 OutputBaseFilename={#MySetupBase}
 OutputDir=..\..\dist_installer
@@ -30,15 +30,15 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; Flags: unchecked
 Name: "uninstallentry"; Description: "Create an &Uninstall entry"; Flags: checkedonce
 
 [Files]
-Source: "..\..\dist\{#MyAppExeName}"; DestDir: "{app}"; DestName: "ChatForge.exe"; Flags: ignoreversion
+Source: "..\..\dist\{#MyAppExeName}"; DestDir: "{app}"; DestName: "ArchiveCord.exe"; Flags: ignoreversion
 Source: "..\..\exe\app_logo.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\ChatForge.exe"; Tasks: startmenuicon; IconFilename: "{app}\app_logo.ico"
-Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\ChatForge.exe"; Tasks: desktopicon; IconFilename: "{app}\app_logo.ico"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\ArchiveCord.exe"; Tasks: startmenuicon; IconFilename: "{app}\app_logo.ico"
+Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\ArchiveCord.exe"; Tasks: desktopicon; IconFilename: "{app}\app_logo.ico"
 
 [Run]
-Filename: "{app}\ChatForge.exe"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\ArchiveCord.exe"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 const

@@ -1,6 +1,6 @@
-# Discord Conversation Processor
+# ArchiveCord
 
-[![Release](https://img.shields.io/github/v/release/DrMemoryFish/ChatForge)](https://github.com/DrMemoryFish/ChatForge/releases)
+[![Release](https://img.shields.io/github/v/release/DrMemoryFish/ArchiveCord)](https://github.com/DrMemoryFish/ArchiveCord/releases)
 
 A production-grade desktop app that unifies Discord conversation export, processing, and preview into a single workflow. It replaces multi-tool manual steps with one cohesive, secure UI.
 
@@ -18,10 +18,10 @@ A production-grade desktop app that unifies Discord conversation export, process
 - Internet access to Discord API
 
 ## Download & Install
-1. Go to the [Releases](https://github.com/DrMemoryFish/ChatForge/releases) tab and download the latest build.
+1. Go to the [Releases](https://github.com/DrMemoryFish/ArchiveCord/releases) tab and download the latest build.
 2. Choose one option:
-3. Portable EXE: run `ChatForge-v<version>-win64-portable.exe` directly. No install required.
-4. Installer EXE: run `ChatForge-v<version>-win64-setup.exe` and follow the wizard.
+3. Portable EXE: run `ArchiveCord-v<version>-win64-portable.exe` directly. No install required.
+4. Installer EXE: run `ArchiveCord-v<version>-win64-setup.exe` and follow the wizard.
 
 **No Python is required for the prebuilt EXEs.**
 
@@ -56,7 +56,7 @@ Build the portable EXE:
 ```
 
 Output:
-- `dist/ChatForge-v<version>-win64-portable.exe`
+- `dist/ArchiveCord-v<version>-win64-portable.exe`
 
 ### 2) Installer EXE (Inno Setup)
 Install **Inno Setup 6** and ensure `ISCC.exe` is available.
@@ -71,7 +71,7 @@ Build the installer:
 ```
 
 Output:
-- `dist_installer/ChatForge-v<version>-win64-setup.exe`
+- `dist_installer/ArchiveCord-v<version>-win64-setup.exe`
 
 ### Icon Replacement
 The application icon is sourced from:
@@ -134,7 +134,7 @@ The Logs tab streams internal events in real time and supports:
 - Clear logs
 
 A rotating log file is also written to:
-- `logs/discordsorter.log`
+- `logs/archivecord.log`
 
 ## Security Notes
 Your token is treated like a password. This app never sends it to third-party services.
@@ -150,7 +150,7 @@ You can view or remove it here:
 - **Control Panel → Credential Manager → Windows Credentials**
 
 It is stored under:
-- **Service name**: `DiscordSorter`
+- **Service name**: `ArchiveCord`
 - **Account name**: `user_token`
 
 Disable **Remember token** to avoid any local storage.

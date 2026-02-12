@@ -25,7 +25,7 @@ class DiscordClient:
         self._session.headers.update(
             {
                 "Authorization": token,
-                "User-Agent": "DiscordSorter/1.0 (+https://discord.com)",
+                "User-Agent": "ArchiveCord/1.0 (+https://discord.com)",
                 "Accept": "application/json",
             }
         )
