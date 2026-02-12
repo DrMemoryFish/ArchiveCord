@@ -190,19 +190,6 @@ This app uses a Discord **user token**. Only use your own account and handle it 
 ## License
 MIT License. See `LICENSE`.
 
-## Releases
-Creating a tag like `v1.0.0` triggers the GitHub Actions release workflow.
-
-```powershell
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-## Release Process
-1. Create a version tag (for example `v1.0.1`).
-2. Push the tag to GitHub.
-3. GitHub Actions builds the portable and setup EXEs and publishes them as Release assets.
-
 ---
 
 This app uses a Discord user token as requested. Use responsibly and within Discord’s terms.
