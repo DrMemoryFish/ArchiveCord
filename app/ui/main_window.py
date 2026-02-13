@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QDate, QTime, QUrl
+from PySide6.QtCore import QDate, QSettings, QTime, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -29,27 +29,90 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.models import ExportOptions
+from app.core.paths import ensure_writable_directory, resolve_default_paths
 from app.core.token_store import TokenStoreError, delete_token, load_token, save_token
 from app.core.utils import build_dt, ensure_dir, sanitize_path_segment
 from app.ui.log_tab import LogTab
+from app.workers.batch_export_worker import BatchExportResult, BatchExportTarget, BatchExportWorker
 from app.workers.conversation_worker import ConversationWorker
 from app.workers.export_worker import ExportWorker
 
+CHANNEL_TYPES_EXPORTABLE = {0, 5}  # GUILD_TEXT, GUILD_NEWS
+CATEGORY_TYPE = 4
+
+NODE_KIND_ROOT = "root"
+NODE_KIND_DM = "dm"
+NODE_KIND_SERVER = "server"
+NODE_KIND_CATEGORY = "category"
+NODE_KIND_CHANNEL = "channel"
+NODE_KIND_PLACEHOLDER = "placeholder"
+
+
+class ConversationTreeWidget(QTreeWidget):
+    toggle_requested = Signal(object)
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        if event.key() == Qt.Key_Space:
+            item = self.currentItem()
+            if item:
+                self.toggle_requested.emit(item)
+                event.accept()
+                return
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            item = self.currentItem()
+            if item and item.childCount() > 0:
+                item.setExpanded(not item.isExpanded())
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(
+        self,
+        *,
+        default_export_root: str | None = None,
+        logs_dir: str | None = None,
+        export_default_fallback_used: bool = False,
+        logs_fallback_used: bool = False,
+        startup_warnings: tuple[str, ...] = (),
+    ):
         super().__init__()
         self.setWindowTitle("ArchiveCord")
         self.resize(1280, 820)
         self.setMinimumSize(1100, 720)
 
+        defaults = resolve_default_paths() if (not default_export_root or not logs_dir) else None
+        resolved_default_export = default_export_root or (defaults.export_root if defaults else "")
+        resolved_logs_dir = logs_dir or (defaults.logs_dir if defaults else "")
+        self._default_export_root = os.path.abspath(resolved_default_export)
+        self._logs_dir = os.path.abspath(resolved_logs_dir)
+        self._export_default_fallback_used = (
+            export_default_fallback_used if default_export_root else (defaults.export_fallback_used if defaults else False)
+        )
+        self._logs_fallback_used = (
+            logs_fallback_used if logs_dir else (defaults.logs_fallback_used if defaults else False)
+        )
+        self._startup_warnings = startup_warnings or (defaults.warnings if defaults else ())
+        self._settings = QSettings("ArchiveCord", "ArchiveCord")
+        self._resolved_export_root = self._default_export_root
+        self._export_root_source = "default"
+
         self._conversation_worker: ConversationWorker | None = None
         self._export_worker: ExportWorker | None = None
+        self._batch_worker: BatchExportWorker | None = None
         self._connected_user: dict | None = None
+        self._selected_targets: list[dict] = []
+        self._tree_syncing = False
+        self._pending_parent_intent: tuple[QTreeWidgetItem, Qt.CheckState] | None = None
+        self._is_export_running = False
+        self._batch_cancel_requested = False
         self._logger = logging.getLogger("discordsorter.ui")
 
         self._build_ui()
+        self._load_output_dir()
         self._load_saved_token()
+        self._log_path_resolution()
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -57,7 +120,6 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(16, 16, 16, 16)
         root_layout.setSpacing(14)
 
-        # Top bar
         top_bar = QHBoxLayout()
         self.token_input = QLineEdit()
         self.token_input.setPlaceholderText("Discord user token")
@@ -83,11 +145,9 @@ class MainWindow(QMainWindow):
 
         root_layout.addLayout(top_bar)
 
-        # Main panels
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
 
-        # Left panel
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setSpacing(10)
@@ -97,14 +157,19 @@ class MainWindow(QMainWindow):
         self.search_input.setPlaceholderText("Search conversations")
         self.search_input.textChanged.connect(self.filter_tree)
 
-        self.tree = QTreeWidget()
+        self.selection_count_label = QLabel("0 items selected")
+
+        self.tree = ConversationTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.itemSelectionChanged.connect(self.on_selection_changed)
+        self.tree.itemPressed.connect(self.on_tree_item_pressed)
+        self.tree.itemChanged.connect(self.on_tree_item_changed)
+        self.tree.toggle_requested.connect(self.on_tree_toggle_requested)
 
         left_layout.addWidget(self.search_input)
+        left_layout.addWidget(self.selection_count_label)
         left_layout.addWidget(self.tree, 1)
 
-        # Right panel
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setSpacing(12)
@@ -116,8 +181,6 @@ class MainWindow(QMainWindow):
         export_layout = QVBoxLayout(export_tab)
         export_layout.setSpacing(12)
         export_layout.setContentsMargins(8, 8, 8, 8)
-
-        # Filters group
         filters_group = QGroupBox("Export Filters")
         filters_layout = QVBoxLayout(filters_group)
         filters_layout.setSpacing(8)
@@ -156,7 +219,6 @@ class MainWindow(QMainWindow):
         self.before_check.toggled.connect(self.update_filter_controls)
         self.after_check.toggled.connect(self.update_filter_controls)
 
-        # Options group
         options_group = QGroupBox("Export Options")
         options_layout = QVBoxLayout(options_group)
         options_layout.setSpacing(6)
@@ -180,14 +242,13 @@ class MainWindow(QMainWindow):
         options_layout.addWidget(self.include_pins)
         options_layout.addWidget(self.include_replies)
 
-        # Output group
         output_group = QGroupBox("Output")
         output_layout = QVBoxLayout(output_group)
         output_layout.setSpacing(6)
 
         self.output_dir_input = QLineEdit()
         self.output_dir_input.setPlaceholderText("Output folder")
-        self.output_dir_input.setText(os.path.join(os.getcwd(), "exports"))
+        self.output_dir_input.editingFinished.connect(self.on_output_dir_edited)
 
         browse_btn = QPushButton("Browse")
         browse_btn.clicked.connect(self.browse_output_dir)
@@ -196,24 +257,42 @@ class MainWindow(QMainWindow):
         output_dir_row.addWidget(self.output_dir_input, 3)
         output_dir_row.addWidget(browse_btn)
 
+        self.output_dir_resolved_label = QLabel("Resolved path:")
+
         self.base_filename_input = QLineEdit()
         self.base_filename_input.setPlaceholderText("Base filename (optional suffix)")
         self.base_filename_input.setText("")
 
         output_layout.addLayout(output_dir_row)
+        output_layout.addWidget(self.output_dir_resolved_label)
         output_layout.addWidget(self.base_filename_input)
 
         self.open_folder_toggle = QCheckBox("Open folder after export")
 
-        # Action controls
+        actions_row = QHBoxLayout()
         self.export_button = QPushButton("Export & Process")
         self.export_button.setObjectName("PrimaryButton")
         self.export_button.clicked.connect(self.on_export)
+        self.export_button.setEnabled(False)
+
+        self.cancel_button = QPushButton("Cancel Batch")
+        self.cancel_button.setVisible(False)
+        self.cancel_button.clicked.connect(self.on_cancel_batch)
+
+        actions_row.addWidget(self.export_button)
+        actions_row.addWidget(self.cancel_button)
+        actions_row.addStretch(1)
 
         self.progress = QProgressBar()
         self.progress.setValue(0)
 
-        # Output preview
+        self.batch_progress_label = QLabel("Batch Progress")
+        self.batch_progress_label.setVisible(False)
+        self.batch_progress = QProgressBar()
+        self.batch_progress.setVisible(False)
+        self.batch_progress.setValue(0)
+        self.batch_progress.setFormat("%v / %m")
+
         preview_label = QLabel("Output Preview")
         self.preview = QPlainTextEdit()
         self.preview.setReadOnly(True)
@@ -222,8 +301,10 @@ class MainWindow(QMainWindow):
         export_layout.addWidget(options_group)
         export_layout.addWidget(output_group)
         export_layout.addWidget(self.open_folder_toggle)
-        export_layout.addWidget(self.export_button)
+        export_layout.addLayout(actions_row)
         export_layout.addWidget(self.progress)
+        export_layout.addWidget(self.batch_progress_label)
+        export_layout.addWidget(self.batch_progress)
         export_layout.addWidget(preview_label)
         export_layout.addWidget(self.preview, 1)
 
@@ -234,7 +315,7 @@ class MainWindow(QMainWindow):
 
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([320, 900])
+        splitter.setSizes([340, 900])
 
         root_layout.addWidget(splitter, 1)
 
@@ -266,8 +347,136 @@ class MainWindow(QMainWindow):
     def browse_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select Output Folder")
         if path:
-            self.output_dir_input.setText(path)
+            self._set_output_dir_value(path)
+            is_custom = self._resolved_export_root != self._default_export_root
+            self._persist_output_dir(self._resolved_export_root, is_custom=is_custom)
+            self._export_root_source = "user-defined" if is_custom else "default"
 
+    def on_output_dir_edited(self) -> None:
+        typed = self.output_dir_input.text().strip()
+        if not typed:
+            self._set_output_dir_value(self._default_export_root)
+            self._persist_output_dir(self._resolved_export_root, is_custom=False)
+            self._export_root_source = "default"
+            return
+        self._set_output_dir_value(typed)
+        is_custom = self._resolved_export_root != self._default_export_root
+        self._persist_output_dir(self._resolved_export_root, is_custom=is_custom)
+        self._export_root_source = "user-defined" if is_custom else "default"
+
+    def _normalize_path(self, value: str) -> str:
+        return os.path.abspath(os.path.normpath(value))
+
+    def _set_output_dir_value(self, path: str) -> None:
+        resolved = self._normalize_path(path)
+        self._resolved_export_root = resolved
+        self.output_dir_input.blockSignals(True)
+        self.output_dir_input.setText(resolved)
+        self.output_dir_input.blockSignals(False)
+        self.output_dir_input.setToolTip(resolved)
+        self.output_dir_resolved_label.setText(f"Resolved path: {resolved}")
+
+    def _persist_output_dir(self, path: str, *, is_custom: bool) -> None:
+        self._settings.setValue("paths/output_dir", self._normalize_path(path))
+        self._settings.setValue("paths/output_dir_is_custom", bool(is_custom))
+        self._settings.sync()
+
+    def _legacy_default_output_root(self) -> str:
+        return self._normalize_path(os.path.join(os.getcwd(), "exports"))
+
+    def _load_output_dir(self) -> None:
+        stored_path = (self._settings.value("paths/output_dir", "", type=str) or "").strip()
+        is_custom = self._settings.value("paths/output_dir_is_custom", False, type=bool)
+        legacy_default = self._legacy_default_output_root()
+
+        if is_custom and stored_path:
+            self._set_output_dir_value(stored_path)
+            self._export_root_source = "user-defined"
+            return
+
+        if stored_path and self._normalize_path(stored_path) == legacy_default:
+            legacy_ok, _ = ensure_writable_directory(legacy_default)
+            if legacy_ok:
+                self._set_output_dir_value(legacy_default)
+                self._export_root_source = "legacy-default"
+                self._persist_output_dir(self._resolved_export_root, is_custom=False)
+                return
+            self._logger.warning(
+                "Previous default export root was not writable. Switching to user-writable default."
+            )
+
+        if not is_custom and os.path.isdir(legacy_default):
+            legacy_ok, _ = ensure_writable_directory(legacy_default)
+            if legacy_ok:
+                self._set_output_dir_value(legacy_default)
+                self._export_root_source = "legacy-default"
+                self._persist_output_dir(self._resolved_export_root, is_custom=False)
+                return
+            self._logger.warning(
+                "Previous default export root was not writable. Switching to user-writable default."
+            )
+
+        self._set_output_dir_value(self._default_export_root)
+        self._export_root_source = "default"
+        self._persist_output_dir(self._resolved_export_root, is_custom=False)
+
+    def _log_path_resolution(self) -> None:
+        for warning in self._startup_warnings:
+            self._logger.warning(warning)
+
+        export_suffix = {
+            "user-defined": " (user-defined)",
+            "legacy-default": " (legacy default)",
+            "default": " (default)",
+        }.get(self._export_root_source, " (default)")
+        if self._export_root_source == "default" and self._export_default_fallback_used:
+            export_suffix = " (default, fallback)"
+
+        logs_suffix = " (default, fallback)" if self._logs_fallback_used else " (default)"
+
+        self._logger.info("Export root resolved to: %s%s", self._resolved_export_root, export_suffix)
+        self._logger.info("Logs path resolved to: %s%s", self._logs_dir, logs_suffix)
+
+    def _item_data(self, item: QTreeWidgetItem) -> dict:
+        data = item.data(0, Qt.UserRole)
+        if isinstance(data, dict):
+            return data
+        return {}
+
+    def _set_item_data(self, item: QTreeWidgetItem, payload: dict) -> None:
+        item.setData(0, Qt.UserRole, payload)
+
+    def _set_parent_item_checkable(self, item: QTreeWidgetItem, payload: dict) -> None:
+        flags = item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsUserCheckable
+        item.setFlags(flags)
+        item.setCheckState(0, Qt.Unchecked)
+        self._set_item_data(item, payload)
+
+    def _set_leaf_item_checkable(self, item: QTreeWidgetItem, payload: dict) -> None:
+        flags = item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsUserCheckable
+        item.setFlags(flags)
+        item.setCheckState(0, Qt.Unchecked)
+        self._set_item_data(item, payload)
+
+    def _set_item_unavailable(self, item: QTreeWidgetItem, payload: dict) -> None:
+        flags = item.flags()
+        flags &= ~Qt.ItemIsEnabled
+        flags &= ~Qt.ItemIsSelectable
+        flags &= ~Qt.ItemIsUserCheckable
+        item.setFlags(flags)
+        item.setCheckState(0, Qt.Unchecked)
+        payload["exportable"] = False
+        payload["disabled"] = True
+        self._set_item_data(item, payload)
+
+    def _disable_parent_if_empty(self, item: QTreeWidgetItem, *, reason_suffix: str = "") -> None:
+        if self._has_selectable_leaf_descendants(item):
+            return
+        payload = self._item_data(item)
+        text = item.text(0)
+        if reason_suffix and reason_suffix not in text:
+            item.setText(0, f"{text} {reason_suffix}")
+        self._set_item_unavailable(item, payload)
     def on_connect(self) -> None:
         token = self._validated_token()
         self._logger.info("Connect initiated.")
@@ -276,11 +485,17 @@ class MainWindow(QMainWindow):
 
         if self._conversation_worker and self._conversation_worker.isRunning():
             return
+        if self._is_export_running:
+            return
 
         self.set_status("Connecting...", connected=False)
         self.connect_button.setEnabled(False)
+        self._tree_syncing = True
         self.tree.clear()
+        self._tree_syncing = False
         self.preview.clear()
+        self._selected_targets = []
+        self._update_selection_ui()
 
         if self.remember_token.isChecked():
             try:
@@ -316,47 +531,138 @@ class MainWindow(QMainWindow):
         guild_count = len(payload.get("guilds", []))
         self._logger.info("Conversations loaded. DMs: %s, Guilds: %s", dm_count, guild_count)
 
+        self._tree_syncing = True
         self.tree.setUpdatesEnabled(False)
+        self.tree.clear()
+
         dms_root = QTreeWidgetItem(["Direct Messages"])
-        dms_root.setFlags(dms_root.flags() & ~Qt.ItemIsSelectable)
+        dms_root.setFlags((dms_root.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
+        self._set_item_data(dms_root, {"node_kind": NODE_KIND_ROOT})
         self.tree.addTopLevelItem(dms_root)
 
         for dm in payload.get("dms", []):
             name = self._dm_name(dm)
-            item = QTreeWidgetItem([name])
-            item.setData(0, Qt.UserRole, {"channel_id": dm.get("id"), "type": "dm", "dm_name": name})
-            dms_root.addChild(item)
+            dm_item = QTreeWidgetItem([name])
+            channel_id = dm.get("id")
+            dm_payload = {
+                "node_kind": NODE_KIND_DM,
+                "type": "dm",
+                "channel_id": channel_id,
+                "dm_name": name,
+                "stable_id": f"dm:{channel_id}" if channel_id else "",
+                "exportable": bool(channel_id),
+            }
+            if channel_id:
+                self._set_leaf_item_checkable(dm_item, dm_payload)
+            else:
+                self._set_item_unavailable(dm_item, dm_payload)
+                dm_item.setText(0, f"{name} (unavailable)")
+            dms_root.addChild(dm_item)
 
         servers_root = QTreeWidgetItem(["Servers"])
-        servers_root.setFlags(servers_root.flags() & ~Qt.ItemIsSelectable)
+        servers_root.setFlags((servers_root.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
+        self._set_item_data(servers_root, {"node_kind": NODE_KIND_ROOT})
         self.tree.addTopLevelItem(servers_root)
 
         for guild in payload.get("guilds", []):
             guild_name = guild.get("name", "Unknown Server")
+            guild_id = guild.get("id")
             guild_item = QTreeWidgetItem([guild_name])
-            guild_item.setFlags(guild_item.flags() & ~Qt.ItemIsSelectable)
+            self._set_parent_item_checkable(
+                guild_item,
+                {
+                    "node_kind": NODE_KIND_SERVER,
+                    "guild_id": guild_id,
+                    "guild_name": guild_name,
+                    "exportable": False,
+                },
+            )
             servers_root.addChild(guild_item)
-            for channel in guild.get("channels", []):
-                name = channel.get("name", "unnamed")
-                channel_item = QTreeWidgetItem([f"# {name}"])
-                channel_item.setData(
-                    0,
-                    Qt.UserRole,
+
+            channels = guild.get("channels", [])
+            categories = [c for c in channels if c.get("type") == CATEGORY_TYPE]
+            exportable_channels = [c for c in channels if c.get("type") in CHANNEL_TYPES_EXPORTABLE]
+
+            category_items: dict[str, QTreeWidgetItem] = {}
+            for category in sorted(categories, key=lambda c: (c.get("position", 0), c.get("name", ""))):
+                category_name = category.get("name") or "Unnamed Category"
+                category_id = category.get("id")
+                category_item = QTreeWidgetItem([category_name])
+                self._set_parent_item_checkable(
+                    category_item,
                     {
-                        "channel_id": channel.get("id"),
-                        "type": "guild",
+                        "node_kind": NODE_KIND_CATEGORY,
+                        "guild_id": guild_id,
                         "guild_name": guild_name,
-                        "channel_name": name,
+                        "category_id": category_id,
+                        "category_name": category_name,
+                        "exportable": False,
                     },
                 )
-                guild_item.addChild(channel_item)
+                guild_item.addChild(category_item)
+                if category_id:
+                    category_items[str(category_id)] = category_item
+
+            for channel in sorted(exportable_channels, key=lambda c: (c.get("position", 0), c.get("name", ""))):
+                channel_name = channel.get("name") or "unnamed"
+                channel_id = channel.get("id")
+                parent_id = channel.get("parent_id")
+                channel_item = QTreeWidgetItem([f"# {channel_name}"])
+                channel_payload = {
+                    "node_kind": NODE_KIND_CHANNEL,
+                    "type": "guild",
+                    "guild_id": guild_id,
+                    "guild_name": guild_name,
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "stable_id": f"channel:{channel_id}" if channel_id else "",
+                    "exportable": bool(channel_id),
+                }
+                if channel_id:
+                    self._set_leaf_item_checkable(channel_item, channel_payload)
+                else:
+                    self._set_item_unavailable(channel_item, channel_payload)
+                    channel_item.setText(0, f"# {channel_name} (unavailable)")
+
+                category_parent = category_items.get(str(parent_id)) if parent_id else None
+                if category_parent:
+                    category_parent.addChild(channel_item)
+                else:
+                    guild_item.addChild(channel_item)
+
+            channels_error = guild.get("channels_error")
+            if channels_error:
+                unavailable = QTreeWidgetItem(["Channels unavailable (permission/API error)"])
+                self._set_item_unavailable(
+                    unavailable,
+                    {
+                        "node_kind": NODE_KIND_PLACEHOLDER,
+                        "guild_id": guild_id,
+                        "guild_name": guild_name,
+                        "exportable": False,
+                    },
+                )
+                guild_item.addChild(unavailable)
+
+            for idx in range(guild_item.childCount()):
+                child = guild_item.child(idx)
+                if self._item_data(child).get("node_kind") == NODE_KIND_CATEGORY:
+                    self._disable_parent_if_empty(child, reason_suffix="(no exportable channels)")
+
+            self._disable_parent_if_empty(guild_item, reason_suffix="(no exportable channels)")
             guild_item.setExpanded(False)
 
         dms_root.setExpanded(True)
         servers_root.setExpanded(True)
-        self.tree.setUpdatesEnabled(True)
         self.tree.expandItem(dms_root)
         self.tree.expandItem(servers_root)
+
+        self.tree.setUpdatesEnabled(True)
+        self._tree_syncing = False
+
+        self._selected_targets = []
+        self._update_selection_ui()
+        self._logger.info("Selection cleared after conversation refresh.")
         self.filter_tree(self.search_input.text())
         self.connect_button.setEnabled(True)
 
@@ -388,28 +694,180 @@ class MainWindow(QMainWindow):
         item = self.tree.currentItem()
         if not item:
             return
-        data = item.data(0, Qt.UserRole)
-        if not data:
-            return
+        data = self._item_data(item)
         channel_id = data.get("channel_id")
         if channel_id:
             self.set_status(f"Selected channel {channel_id}", connected=True)
-            self._logger.debug("Channel selected: %s", channel_id)
+            self._logger.debug("Channel focused: %s", channel_id)
+
+    def on_tree_item_pressed(self, item: QTreeWidgetItem, column: int) -> None:
+        if column != 0 or self._tree_syncing:
+            return
+        if self._is_checkable_parent(item) and self._has_selectable_leaf_descendants(item):
+            self._pending_parent_intent = (item, self._parent_toggle_intent(item.checkState(0)))
+            return
+        self._pending_parent_intent = None
+
+    def _is_leaf_item(self, item: QTreeWidgetItem) -> bool:
+        return self._item_data(item).get("node_kind") in {NODE_KIND_DM, NODE_KIND_CHANNEL}
+
+    def _is_exportable_leaf(self, item: QTreeWidgetItem) -> bool:
+        data = self._item_data(item)
+        return self._is_leaf_item(item) and bool(data.get("exportable")) and bool(data.get("channel_id"))
+
+    def _is_checkable_parent(self, item: QTreeWidgetItem) -> bool:
+        if item.childCount() == 0:
+            return False
+        data = self._item_data(item)
+        if data.get("node_kind") not in {NODE_KIND_SERVER, NODE_KIND_CATEGORY}:
+            return False
+        return bool(item.flags() & Qt.ItemIsUserCheckable)
+
+    def _has_selectable_leaf_descendants(self, item: QTreeWidgetItem) -> bool:
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if self._is_exportable_leaf(child):
+                return True
+            if child.childCount() > 0 and self._has_selectable_leaf_descendants(child):
+                return True
+        return False
+
+    def _set_descendant_leaf_state(self, item: QTreeWidgetItem, state: Qt.CheckState) -> None:
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if self._is_exportable_leaf(child):
+                child.setCheckState(0, state)
+            elif child.childCount() > 0:
+                self._set_descendant_leaf_state(child, state)
+
+    def _recompute_subtree_parent_states(self, node: QTreeWidgetItem) -> None:
+        for i in range(node.childCount()):
+            child = node.child(i)
+            if self._is_checkable_parent(child):
+                self._recompute_subtree_parent_states(child)
+        if self._is_checkable_parent(node):
+            node.setCheckState(0, self._derive_parent_state(node))
+
+    def _parent_toggle_intent(self, current_state: Qt.CheckState) -> Qt.CheckState:
+        if current_state == Qt.Unchecked:
+            return Qt.Checked
+        return Qt.Unchecked
+
+    def _apply_parent_intent(self, item: QTreeWidgetItem, target_state: Qt.CheckState) -> None:
+        if not self._has_selectable_leaf_descendants(item):
+            item.setCheckState(0, Qt.Unchecked)
+            return
+
+        self.tree.setUpdatesEnabled(False)
+        self.tree.blockSignals(True)
+        try:
+            self._set_descendant_leaf_state(item, target_state)
+            self._recompute_subtree_parent_states(item)
+        finally:
+            self.tree.blockSignals(False)
+            self.tree.setUpdatesEnabled(True)
+
+        self._recompute_ancestor_states(item.parent())
+
+    def _derive_parent_state(self, parent: QTreeWidgetItem) -> Qt.CheckState:
+        child_states: list[Qt.CheckState] = []
+        for i in range(parent.childCount()):
+            child = parent.child(i)
+            if self._is_exportable_leaf(child):
+                child_states.append(child.checkState(0))
+                continue
+            if self._is_checkable_parent(child) and self._has_selectable_leaf_descendants(child):
+                child_states.append(child.checkState(0))
+                continue
+        if not child_states:
+            return Qt.Unchecked
+        if all(state == Qt.Checked for state in child_states):
+            return Qt.Checked
+        if all(state == Qt.Unchecked for state in child_states):
+            return Qt.Unchecked
+        return Qt.PartiallyChecked
+
+    def _recompute_ancestor_states(self, item: QTreeWidgetItem | None) -> None:
+        cursor = item
+        while cursor:
+            if self._is_checkable_parent(cursor):
+                cursor.setCheckState(0, self._derive_parent_state(cursor))
+            cursor = cursor.parent()
+
+    def on_tree_toggle_requested(self, item: QTreeWidgetItem) -> None:
+        if self._tree_syncing:
+            return
+        if self._is_exportable_leaf(item):
+            next_state = Qt.Unchecked if item.checkState(0) == Qt.Checked else Qt.Checked
+            item.setCheckState(0, next_state)
+            return
+        if self._is_checkable_parent(item) and self._has_selectable_leaf_descendants(item):
+            target_state = self._parent_toggle_intent(item.checkState(0))
+            self._pending_parent_intent = (item, target_state)
+            item.setCheckState(0, target_state)
+
+    def on_tree_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        if column != 0 or self._tree_syncing:
+            return
+
+        self._tree_syncing = True
+        try:
+            if self._is_exportable_leaf(item):
+                leaf_state = Qt.Checked if item.checkState(0) == Qt.Checked else Qt.Unchecked
+                item.setCheckState(0, leaf_state)
+                self._recompute_ancestor_states(item.parent())
+            elif self._is_checkable_parent(item):
+                if not self._has_selectable_leaf_descendants(item):
+                    item.setCheckState(0, Qt.Unchecked)
+                else:
+                    pending = self._pending_parent_intent
+                    if pending and pending[0] is item:
+                        target_state = pending[1]
+                    else:
+                        target_state = (
+                            Qt.Checked if item.checkState(0) == Qt.Checked else Qt.Unchecked
+                        )
+                    self._pending_parent_intent = None
+                    self._apply_parent_intent(item, target_state)
+        finally:
+            self._tree_syncing = False
+
+        self._selected_targets = self._collect_checked_targets()
+        self._update_selection_ui()
+
+    def _collect_checked_targets(self) -> list[dict]:
+        targets: list[dict] = []
+        seen: set[str] = set()
+
+        def visit(node: QTreeWidgetItem) -> None:
+            if self._is_exportable_leaf(node) and node.checkState(0) == Qt.Checked:
+                data = dict(self._item_data(node))
+                stable_id = data.get("stable_id")
+                if stable_id and stable_id not in seen:
+                    seen.add(stable_id)
+                    targets.append(data)
+            for idx in range(node.childCount()):
+                visit(node.child(idx))
+
+        for i in range(self.tree.topLevelItemCount()):
+            visit(self.tree.topLevelItem(i))
+        return targets
+
+    def _update_selection_ui(self) -> None:
+        count = len(self._selected_targets)
+        label = "item" if count == 1 else "items"
+        self.selection_count_label.setText(f"{count} {label} selected")
+        self.export_button.setEnabled((count > 0) and (not self._is_export_running))
 
     def on_export(self) -> None:
         token = self._validated_token()
         if not token:
             return
 
-        selection = self._selected_item_data()
-        if not selection:
-            self._logger.warning("Export blocked: no channel selected.")
-            self.set_status("Select a channel or DM", connected=True)
-            return
-        channel_id = selection.get("channel_id")
-        if not channel_id:
-            self._logger.warning("Export blocked: selection missing channel id.")
-            self.set_status("Select a channel or DM", connected=True)
+        targets = self._collect_checked_targets()
+        if not targets:
+            self._logger.warning("Export blocked: no checked items.")
+            self.set_status("Select at least one DM or channel", connected=True)
             return
 
         if not (self.export_json.isChecked() or self.export_txt.isChecked() or self.export_attachments.isChecked()):
@@ -422,8 +880,25 @@ class MainWindow(QMainWindow):
             self._logger.warning("Export blocked: output directory missing.")
             self.set_status("Output folder required", connected=True)
             return
-        output_dir, base_filename = self._build_export_target(selection, output_root)
-        ensure_dir(output_dir)
+        self._set_output_dir_value(output_root)
+        output_root = self._resolved_export_root
+        self._persist_output_dir(
+            output_root,
+            is_custom=(output_root != self._default_export_root),
+        )
+        self._export_root_source = "user-defined" if output_root != self._default_export_root else "default"
+
+        root_ok, root_error = ensure_writable_directory(output_root)
+        if not root_ok:
+            self._logger.error("Export blocked: output root not writable. %s", root_error)
+            self.set_status("Output folder is not writable. Choose another folder.", connected=True)
+            return
+
+        logs_ok, logs_error = ensure_writable_directory(self._logs_dir)
+        if not logs_ok:
+            self._logger.error("Export blocked: logs path not writable. %s", logs_error)
+            self.set_status("Logs folder is not writable. Export blocked.", connected=True)
+            return
 
         before_dt = None
         after_dt = None
@@ -432,53 +907,193 @@ class MainWindow(QMainWindow):
         if self.after_check.isChecked():
             after_dt = build_dt(self.after_date.date().toPython(), self.after_time.time().toPython())
 
-        options = ExportOptions(
-            channel_id=channel_id,
-            before_dt=before_dt,
-            after_dt=after_dt,
-            export_json=self.export_json.isChecked(),
-            export_txt=self.export_txt.isChecked(),
-            export_attachments=self.export_attachments.isChecked(),
-            include_edits=self.include_edits.isChecked(),
-            include_pins=self.include_pins.isChecked(),
-            include_replies=self.include_replies.isChecked(),
-            output_dir=output_dir,
-            base_filename=base_filename,
-        )
+        batch_targets: list[BatchExportTarget] = []
+        for target in targets:
+            output_dir, base_filename = self._build_export_target(target, output_root)
+            ensure_dir(output_dir)
+            options = ExportOptions(
+                channel_id=target.get("channel_id"),
+                before_dt=before_dt,
+                after_dt=after_dt,
+                export_json=self.export_json.isChecked(),
+                export_txt=self.export_txt.isChecked(),
+                export_attachments=self.export_attachments.isChecked(),
+                include_edits=self.include_edits.isChecked(),
+                include_pins=self.include_pins.isChecked(),
+                include_replies=self.include_replies.isChecked(),
+                output_dir=output_dir,
+                base_filename=base_filename,
+            )
+            label = (
+                target.get("dm_name")
+                if target.get("type") == "dm"
+                else f"{target.get('guild_name', 'Server')} #{target.get('channel_name', 'channel')}"
+            )
+            batch_targets.append(
+                BatchExportTarget(
+                    stable_id=target.get("stable_id"),
+                    label=label,
+                    options=options,
+                )
+            )
 
+        if len(batch_targets) == 1:
+            self._start_single_export(token, batch_targets[0])
+        else:
+            self._start_batch_export(token, batch_targets)
+
+    def _start_single_export(self, token: str, target: BatchExportTarget) -> None:
         if self._export_worker and self._export_worker.isRunning():
             return
+        if self._batch_worker and self._batch_worker.isRunning():
+            return
 
-        self.export_button.setEnabled(False)
+        self._is_export_running = True
+        self._update_selection_ui()
+        self.cancel_button.setVisible(False)
+        self.batch_progress.setVisible(False)
+        self.batch_progress_label.setVisible(False)
         self.progress.setRange(0, 0)
         self.preview.clear()
         self.set_status("Exporting...", connected=True)
         self._logger.info(
             "Export started. Channel=%s JSON=%s TXT=%s Attachments=%s",
-            channel_id,
+            target.options.channel_id,
             self.export_json.isChecked(),
             self.export_txt.isChecked(),
             self.export_attachments.isChecked(),
         )
 
-        self._export_worker = ExportWorker(token, options)
+        self._export_worker = ExportWorker(token, target.options)
         self._export_worker.status.connect(lambda msg: self.set_status(msg, connected=True))
         self._export_worker.preview.connect(self.preview.setPlainText)
         self._export_worker.error.connect(self.on_export_error)
         self._export_worker.finished.connect(self.on_export_finished)
         self._export_worker.start()
+    def _start_batch_export(self, token: str, targets: list[BatchExportTarget]) -> None:
+        if self._batch_worker and self._batch_worker.isRunning():
+            return
+        if self._export_worker and self._export_worker.isRunning():
+            return
 
-    def on_export_error(self, message: str) -> None:
+        self._is_export_running = True
+        self._batch_cancel_requested = False
+        self._update_selection_ui()
+        self.progress.setRange(0, 0)
+        self.preview.clear()
+        self.cancel_button.setVisible(True)
+        self.cancel_button.setEnabled(True)
+        self.batch_progress_label.setVisible(True)
+        self.batch_progress_label.setText("Batch Progress")
+        self.batch_progress.setVisible(True)
+        self.batch_progress.setRange(0, len(targets))
+        self.batch_progress.setValue(0)
+        self.set_status(f"Batch export started ({len(targets)} items)", connected=True)
+        self._logger.info("Batch export requested for %s items.", len(targets))
+
+        self._batch_worker = BatchExportWorker(token, targets)
+        self._batch_worker.status.connect(lambda msg: self.set_status(msg, connected=True))
+        self._batch_worker.preview.connect(self.preview.setPlainText)
+        self._batch_worker.item_started.connect(self.on_batch_item_started)
+        self._batch_worker.batch_progress.connect(self.on_batch_progress)
+        self._batch_worker.error.connect(self.on_batch_error)
+        self._batch_worker.finished.connect(self.on_batch_finished)
+        self._batch_worker.start()
+
+    def on_batch_item_started(self, index: int, total: int, label: str) -> None:
+        self.batch_progress_label.setText(f"Exporting {index} of {total}: {label}")
+        self.preview.clear()
+
+    def on_batch_progress(self, completed: int, total: int) -> None:
+        self.batch_progress.setRange(0, total)
+        self.batch_progress.setValue(completed)
+
+    def on_cancel_batch(self) -> None:
+        if not self._batch_worker or not self._batch_worker.isRunning():
+            return
+        if self._batch_cancel_requested:
+            return
+        self._batch_cancel_requested = True
+        self.cancel_button.setEnabled(False)
+        self._batch_worker.cancel()
+        self._logger.warning("Batch cancellation requested by user.")
+        self.set_status("Cancellation requested. Current item will finish.", connected=True)
+
+    def on_batch_error(self, message: str) -> None:
+        self._is_export_running = False
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
-        self.export_button.setEnabled(True)
+        self.cancel_button.setVisible(False)
+        self.batch_progress_label.setVisible(False)
+        self.batch_progress.setVisible(False)
         self.set_status(message, connected=True)
-        self._logger.error("Export failed: %s", message)
+        self._logger.error("Batch export failed: %s", message)
+        self._update_selection_ui()
 
-    def on_export_finished(self, result) -> None:
+    def on_batch_finished(self, result: BatchExportResult) -> None:
+        self._is_export_running = False
         self.progress.setRange(0, 100)
         self.progress.setValue(100)
-        self.export_button.setEnabled(True)
+        self.cancel_button.setVisible(False)
+        self.cancel_button.setEnabled(True)
+        self.batch_progress_label.setVisible(True)
+        self.batch_progress_label.setText(
+            f"Batch complete: {result.succeeded} succeeded, {result.failed} failed"
+        )
+        self.batch_progress.setVisible(True)
+        self.batch_progress.setRange(0, max(result.attempted, 1))
+        self.batch_progress.setValue(result.attempted)
+        if result.cancelled:
+            self._logger.warning(
+                "Batch export cancelled. Attempted=%s, succeeded=%s, failed=%s",
+                result.attempted,
+                result.succeeded,
+                result.failed,
+            )
+        else:
+            self._logger.info(
+                "Batch export finished. Attempted=%s, succeeded=%s, failed=%s",
+                result.attempted,
+                result.succeeded,
+                result.failed,
+            )
+
+        status = (
+            f"Batch export cancelled | Attempted: {result.attempted} | Success: {result.succeeded} | Failed: {result.failed}"
+            if result.cancelled
+            else f"Batch export complete | Attempted: {result.attempted} | Success: {result.succeeded} | Failed: {result.failed}"
+        )
+        self.set_status(status, connected=True)
+
+        if self.open_folder_toggle.isChecked() and result.last_success:
+            target = (
+                result.last_success.txt_path
+                or result.last_success.json_path
+                or result.last_success.attachments_dir
+            )
+            if target:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(target)))
+
+        self._update_selection_ui()
+
+    def on_export_error(self, message: str) -> None:
+        self._is_export_running = False
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.cancel_button.setVisible(False)
+        self.batch_progress.setVisible(False)
+        self.batch_progress_label.setVisible(False)
+        self.set_status(message, connected=True)
+        self._logger.error("Export failed: %s", message)
+        self._update_selection_ui()
+
+    def on_export_finished(self, result) -> None:
+        self._is_export_running = False
+        self.progress.setRange(0, 100)
+        self.progress.setValue(100)
+        self.cancel_button.setVisible(False)
+        self.batch_progress.setVisible(False)
+        self.batch_progress_label.setVisible(False)
         status_parts = ["Export complete"]
         if result.json_path:
             status_parts.append(f"JSON: {result.json_path}")
@@ -492,27 +1107,24 @@ class MainWindow(QMainWindow):
             target = result.txt_path or result.json_path or result.attachments_dir
             if target:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(target)))
-
-    def _selected_item_data(self) -> dict | None:
-        item = self.tree.currentItem()
-        if not item:
-            return None
-        data = item.data(0, Qt.UserRole)
-        if not data:
-            return None
-        return dict(data)
+        self._update_selection_ui()
 
     def _build_export_target(self, selection: dict, output_root: str) -> tuple[str, str]:
         chat_type = selection.get("type")
         if chat_type == "dm":
             dm_name = selection.get("dm_name") or "Direct Message"
             chat_label = dm_name
-            output_dir = os.path.join(output_root, "DMs")
+            output_dir = os.path.join(output_root, "DMs", sanitize_path_segment(dm_name))
         else:
             guild_name = selection.get("guild_name") or "Server"
             channel_name = selection.get("channel_name") or "channel"
             chat_label = f"{guild_name} #{channel_name}"
-            output_dir = os.path.join(output_root, "Servers", sanitize_path_segment(guild_name))
+            output_dir = os.path.join(
+                output_root,
+                "Servers",
+                sanitize_path_segment(guild_name),
+                sanitize_path_segment(channel_name),
+            )
 
         parts = [sanitize_path_segment(chat_label)]
 
@@ -531,7 +1143,6 @@ class MainWindow(QMainWindow):
             parts.insert(1, sanitize_path_segment(suffix))
         base_filename = " ".join(parts)
         return output_dir, base_filename
-
     def _build_date_part(self) -> str:
         if not (self.before_check.isChecked() or self.after_check.isChecked()):
             return ""
