@@ -71,14 +71,23 @@ jobs:
           if (!(Test-Path $portable)) { throw "Missing artifact: $portable" }
           if (!(Test-Path $setup)) { throw "Missing artifact: $setup" }
 
+      - name: Stage Windows release artifacts
+        shell: pwsh
+        run: |
+          $portable = "dist/ArchiveCord-v$env:RELEASE_VERSION-win64-portable.exe"
+          $setup = "dist_installer/ArchiveCord-v$env:RELEASE_VERSION-win64-setup.exe"
+          New-Item -ItemType Directory -Path "release-flat" -Force | Out-Null
+          Copy-Item $portable "release-flat/ArchiveCord-v$env:RELEASE_VERSION-win64-portable.exe" -Force
+          Copy-Item $setup "release-flat/ArchiveCord-v$env:RELEASE_VERSION-win64-setup.exe" -Force
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-windows
           if-no-files-found: error
           path: |
-            dist/ArchiveCord-v${{ env.RELEASE_VERSION }}-win64-portable.exe
-            dist_installer/ArchiveCord-v${{ env.RELEASE_VERSION }}-win64-setup.exe
+            release-flat/ArchiveCord-v${{ env.RELEASE_VERSION }}-win64-portable.exe
+            release-flat/ArchiveCord-v${{ env.RELEASE_VERSION }}-win64-setup.exe
 
   build_macos:
     runs-on: macos-latest
@@ -150,14 +159,22 @@ jobs:
           test -f "dist/ArchiveCord-v${RELEASE_VERSION}-macos-universal.dmg"
           test -f "dist/ArchiveCord-v${RELEASE_VERSION}-macos-universal.zip"
 
+      - name: Stage macOS release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-flat
+          cp "dist/ArchiveCord-v${RELEASE_VERSION}-macos-universal.dmg" "release-flat/ArchiveCord-v${RELEASE_VERSION}-macos-universal.dmg"
+          cp "dist/ArchiveCord-v${RELEASE_VERSION}-macos-universal.zip" "release-flat/ArchiveCord-v${RELEASE_VERSION}-macos-universal.zip"
+
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-macos
           if-no-files-found: error
           path: |
-            dist/ArchiveCord-v${{ env.RELEASE_VERSION }}-macos-universal.dmg
-            dist/ArchiveCord-v${{ env.RELEASE_VERSION }}-macos-universal.zip
+            release-flat/ArchiveCord-v${{ env.RELEASE_VERSION }}-macos-universal.dmg
+            release-flat/ArchiveCord-v${{ env.RELEASE_VERSION }}-macos-universal.zip
 
   build_linux:
     runs-on: ubuntu-22.04
@@ -237,14 +254,22 @@ jobs:
           test -f "dist/ArchiveCord-v${RELEASE_VERSION}-linux-x86_64.AppImage"
           test -f "dist/ArchiveCord-v${RELEASE_VERSION}-linux-x86_64.tar.gz"
 
+      - name: Stage Linux release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-flat
+          cp "dist/ArchiveCord-v${RELEASE_VERSION}-linux-x86_64.AppImage" "release-flat/ArchiveCord-v${RELEASE_VERSION}-linux-x86_64.AppImage"
+          cp "dist/ArchiveCord-v${RELEASE_VERSION}-linux-x86_64.tar.gz" "release-flat/ArchiveCord-v${RELEASE_VERSION}-linux-x86_64.tar.gz"
+
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-linux
           if-no-files-found: error
           path: |
-            dist/ArchiveCord-v${{ env.RELEASE_VERSION }}-linux-x86_64.AppImage
-            dist/ArchiveCord-v${{ env.RELEASE_VERSION }}-linux-x86_64.tar.gz
+            release-flat/ArchiveCord-v${{ env.RELEASE_VERSION }}-linux-x86_64.AppImage
+            release-flat/ArchiveCord-v${{ env.RELEASE_VERSION }}-linux-x86_64.tar.gz
 
   publish:
     runs-on: ubuntu-22.04
@@ -263,7 +288,7 @@ jobs:
           merge-multiple: true
           path: release-assets
 
-      - name: Normalize and verify release payload
+      - name: Verify release payload
         shell: bash
         run: |
           set -euo pipefail
@@ -276,25 +301,11 @@ jobs:
             "ArchiveCord-v${RELEASE_VERSION}-linux-x86_64.tar.gz"
           )
           for file in "${required[@]}"; do
-            mapfile -t matches < <(find release-assets -type f -name "${file}" -print)
-            if [[ ${#matches[@]} -eq 0 ]]; then
-              echo "Missing release asset anywhere under release-assets/: ${file}" >&2
-              exit 1
-            fi
-            if [[ ${#matches[@]} -gt 1 ]]; then
-              echo "Duplicate release assets found for ${file}:" >&2
-              printf ' - %s\n' "${matches[@]}" >&2
-              exit 1
-            fi
-            if [[ "${matches[0]}" != "release-assets/${file}" ]]; then
-              cp "${matches[0]}" "release-assets/${file}"
-            fi
             if [[ ! -f "release-assets/${file}" ]]; then
               echo "Missing release asset: release-assets/${file}" >&2
               exit 1
             fi
           done
-          find release-assets -mindepth 1 -type d -empty -delete
           ls -lh release-assets
 
       - name: Publish GitHub release assets
