@@ -4,9 +4,9 @@ import logging
 import logging.handlers
 import os
 import queue
-from datetime import datetime
 from typing import Optional
 
+from app.core.paths import resolve_default_paths
 from app.core.utils import ensure_dir
 
 LOG_FORMAT = "[%(asctime)s] [%(levelname)s] %(message)s"
@@ -22,10 +22,12 @@ class LoggingController:
             self._listener.stop()
 
 
-def setup_logging(log_dir: str = "logs") -> Optional[LoggingController]:
+def setup_logging(log_dir: str | None = None) -> Optional[LoggingController]:
     if getattr(setup_logging, "_configured", False):
         return None
 
+    if not log_dir:
+        log_dir = resolve_default_paths().logs_dir
     ensure_dir(log_dir)
     log_path = os.path.join(log_dir, "archivecord.log")
 

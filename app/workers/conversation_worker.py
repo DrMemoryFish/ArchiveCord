@@ -32,23 +32,22 @@ class ConversationWorker(QThread):
 
             guild_entries: List[Dict] = []
             for guild in guilds:
+                channels_error = None
                 try:
                     channels = client.get_guild_channels(guild["id"])
                 except DiscordAPIError as exc:
                     logger.warning("Failed to load channels for guild %s: %s", guild.get("id"), exc)
                     channels = []
-                text_channels = [
-                    ch
-                    for ch in channels
-                    if ch.get("type") in (0, 5)  # GUILD_TEXT, GUILD_NEWS
+                    channels_error = str(exc)
+                visible_channels = [
+                    ch for ch in channels if ch.get("type") in (0, 4, 5)  # TEXT, CATEGORY, NEWS
                 ]
                 guild_entries.append(
                     {
                         "id": guild["id"],
                         "name": guild.get("name", "Unknown Server"),
-                        "channels": sorted(
-                            text_channels, key=lambda c: c.get("position", 0)
-                        ),
+                        "channels": sorted(visible_channels, key=lambda c: c.get("position", 0)),
+                        "channels_error": channels_error,
                     }
                 )
 

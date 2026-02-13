@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from app.core.models import ExportOptions
 from app.core.paths import ensure_writable_directory, resolve_default_paths
-from app.core.token_store import TokenStoreError, delete_token, load_token, save_token
+from app.core.token_store import TokenStoreError, delete_token, keyring_available, load_token, save_token
 from app.core.utils import build_dt, ensure_dir, sanitize_path_segment
 from app.ui.log_tab import LogTab
 from app.workers.batch_export_worker import BatchExportResult, BatchExportTarget, BatchExportWorker
@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
         self._logger = logging.getLogger("discordsorter.ui")
 
         self._build_ui()
+        self._configure_token_persistence()
         self._load_output_dir()
         self._load_saved_token()
         self._log_path_resolution()
@@ -322,6 +323,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
 
     def _load_saved_token(self) -> None:
+        if not self.remember_token.isEnabled():
+            return
         try:
             stored = load_token()
         except TokenStoreError as exc:
@@ -330,6 +333,15 @@ class MainWindow(QMainWindow):
         if stored:
             self.token_input.setText(stored)
             self.remember_token.setChecked(True)
+
+    def _configure_token_persistence(self) -> None:
+        available, reason = keyring_available()
+        if available:
+            return
+        self.remember_token.setChecked(False)
+        self.remember_token.setEnabled(False)
+        self.remember_token.setToolTip(reason or "Keyring backend unavailable on this system.")
+        self._logger.warning("Remember token disabled: %s", reason or "keyring unavailable")
 
     def set_status(self, message: str, connected: bool | None = None) -> None:
         self.status_label.setText(message)

@@ -14,16 +14,30 @@ A production-grade desktop app that unifies Discord conversation export, process
 - Real-time Logs tab with filtering, search, and copy controls.
 
 ## Requirements
-- Windows 10/11
+- Windows 10/11, macOS, or Linux
 - Internet access to Discord API
 
 ## Download & Install
 1. Go to the [Releases](https://github.com/DrMemoryFish/ArchiveCord/releases) tab and download the latest build.
-2. Choose one option:
-3. Portable EXE: run `ArchiveCord-v<version>-win64-portable.exe` directly. No install required.
-4. Installer EXE: run `ArchiveCord-v<version>-win64-setup.exe` and follow the wizard.
+2. Choose your platform:
+3. Windows portable: `ArchiveCord-v<version>-win64-portable.exe`
+4. Windows installer: `ArchiveCord-v<version>-win64-setup.exe`
+5. macOS primary: `ArchiveCord-v<version>-macos-universal.dmg`
+6. macOS fallback: `ArchiveCord-v<version>-macos-universal.zip` (contains `ArchiveCord.app`)
+7. Linux primary: `ArchiveCord-v<version>-linux-x86_64.AppImage`
+8. Linux fallback: `ArchiveCord-v<version>-linux-x86_64.tar.gz`
 
-**No Python is required for the prebuilt EXEs.**
+Run basics:
+- Windows portable: run the EXE directly.
+- Windows installer: run setup EXE and follow the wizard.
+- macOS DMG/ZIP: drag `ArchiveCord.app` to `Applications`, then open it.
+- Linux AppImage: `chmod +x ArchiveCord-v<version>-linux-x86_64.AppImage` then run it.
+- Linux tar.gz: extract and run `ArchiveCord`.
+
+**No Python is required for prebuilt release artifacts.**
+
+Unsigned build note:
+- Windows/macOS/Linux artifacts are currently unsigned. SmartScreen/Gatekeeper/desktop warnings on first run are expected.
 
 ## Build From Source
 ### Requirements
@@ -41,8 +55,8 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-## Packaging (Portable + Installer)
-The project includes packaging scripts for Windows builds.
+## Packaging
+The project includes packaging scripts for Windows, macOS, and Linux builds.
 
 ### 1) Portable EXE (single file, no installer)
 Install PyInstaller into your environment (use the same `.venv` you run the app with):
@@ -73,6 +87,24 @@ Build the installer:
 Output:
 - `dist_installer/ArchiveCord-v<version>-win64-setup.exe`
 
+### 3) macOS App Bundle + DMG/ZIP
+```bash
+./packaging/build_macos.sh <version>
+```
+
+Output:
+- `dist/ArchiveCord-v<version>-macos-universal.dmg`
+- `dist/ArchiveCord-v<version>-macos-universal.zip`
+
+### 4) Linux AppImage + tar.gz
+```bash
+./packaging/build_linux.sh <version>
+```
+
+Output:
+- `dist/ArchiveCord-v<version>-linux-x86_64.AppImage`
+- `dist/ArchiveCord-v<version>-linux-x86_64.tar.gz`
+
 ### Icon Replacement
 The application icon is sourced from:
 ```
@@ -97,11 +129,19 @@ Replace that file to update the portable EXE, installer icon, and shortcuts.
 - **Include reply references**: adds reply block with resolved original message.
 
 ## Output Location
-Exports are saved under `exports/` and organized by chat type.
+Exports are saved to a user-writable root and organized by chat type.
 
-Default folders:
-- `exports/DMs/`
-- `exports/Servers/<Server Name>/`
+Default export root:
+- `%USERPROFILE%\Documents\ArchiveCord\exports`
+
+Fallback when Documents cannot be resolved:
+- `%LOCALAPPDATA%\ArchiveCord\exports`
+
+Default folders under the export root:
+- `DMs/<DM Name>/`
+- `Servers/<Server Name>/<Channel Name>/`
+
+If you choose a custom output directory in the UI, that path is saved and reused on next launch.
 
 Filenames include filters and export time for uniqueness:
 - `Direct_Message [20260106-20260211] [08:00-23:59] [Exported 20260211_1530].txt`
@@ -134,7 +174,8 @@ The Logs tab streams internal events in real time and supports:
 - Clear logs
 
 A rotating log file is also written to:
-- `logs/archivecord.log`
+- `%LOCALAPPDATA%\ArchiveCord\logs\archivecord.log`
+If LocalAppData is unavailable, the app falls back to a logs folder adjacent to the export root.
 
 ## Security Notes
 Your token is treated like a password. This app never sends it to third-party services.
