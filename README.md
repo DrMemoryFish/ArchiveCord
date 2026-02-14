@@ -30,17 +30,11 @@ Default output (if you do not change it):
 ## First Export in 2 Minutes
 1. Launch ArchiveCord and paste token.
 2. Click `Connect` and wait for DMs/Servers to load.
-3. In the conversation tree, check:
-- a DM, or
-- a channel, or
-- an entire server/category (propagates to descendants).
+3. In the conversation tree, check a DM, a channel, or an entire server/category (propagates to descendants).
 4. Optional: set `Before` / `After` date-time filters.
 5. Ensure at least one output format is enabled (`Export formatted TXT` is enabled by default).
 6. Click `Export & Process`.
-7. Watch:
-- Status bar messages,
-- Preview pane (current item),
-- Batch progress (`Exporting X of Y`) when multiple items are selected.
+7. Watch status messages, preview updates (current item), and batch progress (`Exporting X of Y`) for multi-item exports.
 8. Open exported files from your output directory (or enable `Open folder after export`).
 
 ## Demo GIF (Planned)
@@ -77,10 +71,7 @@ Note:
 ## Selection and Export Behavior (Current)
 - Leaf-only targets: exports are derived from checked DM/channel leaf nodes only.
 - Parents (server/category) are never export targets; they only control descendants.
-- Parent toggle intent:
-- Unchecked -> select all selectable descendants.
-- Checked -> deselect all selectable descendants.
-- Partially checked -> deselect all selectable descendants.
+- Parent toggle intent: unchecked selects all selectable descendants; checked and partially checked deselect all selectable descendants.
 - Disabled/unavailable nodes are not selectable and are never exported.
 - Refreshing/reconnecting clears current selection.
 - Single selection uses single-export flow; multi-selection uses sequential batch flow.
