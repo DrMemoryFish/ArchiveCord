@@ -35,8 +35,6 @@ from app.core.icon_cache import (
     build_dm_avatar_url,
     build_guild_icon_url,
     default_avatar_index,
-    placeholder_category_icon,
-    placeholder_channel_icon,
     placeholder_dm_icon,
     placeholder_guild_icon,
 )
@@ -124,8 +122,6 @@ class MainWindow(QMainWindow):
         self._icon_items: dict[str, list[QTreeWidgetItem]] = {}
         self._dm_fallback_icon: QIcon = placeholder_dm_icon()
         self._guild_fallback_icon: QIcon = placeholder_guild_icon()
-        self._channel_fallback_icon: QIcon = placeholder_channel_icon()
-        self._category_fallback_icon: QIcon = placeholder_category_icon()
 
         self._build_ui()
         self._configure_token_persistence()
@@ -279,7 +275,7 @@ class MainWindow(QMainWindow):
         self.output_dir_resolved_label = QLabel("Resolved path:")
 
         self.base_filename_input = QLineEdit()
-        self.base_filename_input.setPlaceholderText("Base filename (optional suffix)")
+        self.base_filename_input.setPlaceholderText("Filename suffix (optional)")
         self.base_filename_input.setText("")
 
         output_layout.addLayout(output_dir_row)
@@ -287,6 +283,8 @@ class MainWindow(QMainWindow):
         output_layout.addWidget(self.base_filename_input)
 
         self.open_folder_toggle = QCheckBox("Open folder after export")
+        self._load_open_folder_preference()
+        self.open_folder_toggle.toggled.connect(self._persist_open_folder_preference)
 
         actions_row = QHBoxLayout()
         self.export_button = QPushButton("Export & Process")
@@ -409,6 +407,23 @@ class MainWindow(QMainWindow):
     def _persist_output_dir(self, path: str, *, is_custom: bool) -> None:
         self._settings.setValue("paths/output_dir", self._normalize_path(path))
         self._settings.setValue("paths/output_dir_is_custom", bool(is_custom))
+        self._settings.sync()
+
+    def _load_open_folder_preference(self) -> None:
+        raw = self._settings.value("ui/open_folder_after_export", None)
+        if raw is None:
+            self.open_folder_toggle.setChecked(True)
+            return
+        if isinstance(raw, bool):
+            self.open_folder_toggle.setChecked(raw)
+            return
+        if isinstance(raw, str):
+            self.open_folder_toggle.setChecked(raw.strip().lower() in {"1", "true", "yes", "on"})
+            return
+        self.open_folder_toggle.setChecked(bool(raw))
+
+    def _persist_open_folder_preference(self, checked: bool) -> None:
+        self._settings.setValue("ui/open_folder_after_export", bool(checked))
         self._settings.sync()
 
     def _legacy_default_output_root(self) -> str:
@@ -699,7 +714,6 @@ class MainWindow(QMainWindow):
                 category_name = category.get("name") or "Unnamed Category"
                 category_id = category.get("id")
                 category_item = QTreeWidgetItem([category_name])
-                category_item.setIcon(0, self._category_fallback_icon)
                 self._set_parent_item_checkable(
                     category_item,
                     {
@@ -720,7 +734,6 @@ class MainWindow(QMainWindow):
                 channel_id = channel.get("id")
                 parent_id = channel.get("parent_id")
                 channel_item = QTreeWidgetItem([f"# {channel_name}"])
-                channel_item.setIcon(0, self._channel_fallback_icon)
                 channel_payload = {
                     "node_kind": NODE_KIND_CHANNEL,
                     "type": "guild",
@@ -746,7 +759,6 @@ class MainWindow(QMainWindow):
             channels_error = guild.get("channels_error")
             if channels_error:
                 unavailable = QTreeWidgetItem(["Channels unavailable (permission/API error)"])
-                unavailable.setIcon(0, self._channel_fallback_icon)
                 self._set_item_unavailable(
                     unavailable,
                     {
