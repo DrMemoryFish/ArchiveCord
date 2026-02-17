@@ -122,6 +122,8 @@ class MainWindow(QMainWindow):
         self._icon_items: dict[str, list[QTreeWidgetItem]] = {}
         self._dm_fallback_icon: QIcon = placeholder_dm_icon()
         self._guild_fallback_icon: QIcon = placeholder_guild_icon()
+        self._dms_root_item: QTreeWidgetItem | None = None
+        self._servers_root_item: QTreeWidgetItem | None = None
 
         self._build_ui()
         self._configure_token_persistence()
@@ -150,6 +152,7 @@ class MainWindow(QMainWindow):
         self.status_dot.setProperty("connected", False)
 
         self.status_label = QLabel("Disconnected")
+        self.connected_user_label = QLabel(self.tr("Connected as: -"))
 
         top_bar.addWidget(self.token_input, 3)
         top_bar.addWidget(self.remember_token, 1)
@@ -157,6 +160,7 @@ class MainWindow(QMainWindow):
         top_bar.addSpacing(10)
         top_bar.addWidget(self.status_dot)
         top_bar.addWidget(self.status_label)
+        top_bar.addWidget(self.connected_user_label)
 
         root_layout.addLayout(top_bar)
 
@@ -173,6 +177,9 @@ class MainWindow(QMainWindow):
         self.search_input.textChanged.connect(self.filter_tree)
 
         self.selection_count_label = QLabel("0 items selected")
+        self.show_ids_tooltips_toggle = QCheckBox(self.tr("Show IDs in tooltips"))
+        self._load_show_ids_tooltips_preference()
+        self.show_ids_tooltips_toggle.toggled.connect(self.on_show_ids_tooltips_toggled)
 
         self.tree = ConversationTreeWidget()
         self.tree.setHeaderHidden(True)
@@ -183,6 +190,7 @@ class MainWindow(QMainWindow):
 
         left_layout.addWidget(self.search_input)
         left_layout.addWidget(self.selection_count_label)
+        left_layout.addWidget(self.show_ids_tooltips_toggle)
         left_layout.addWidget(self.tree, 1)
 
         right_panel = QWidget()
@@ -300,11 +308,14 @@ class MainWindow(QMainWindow):
         actions_row.addWidget(self.cancel_button)
         actions_row.addStretch(1)
 
+        self.batch_progress_label = QLabel("")
+        self.batch_progress_label.setVisible(False)
+
         self.progress = QProgressBar()
         self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        self.progress.setVisible(False)
 
-        self.batch_progress_label = QLabel("Batch Progress")
-        self.batch_progress_label.setVisible(False)
         self.batch_progress = QProgressBar()
         self.batch_progress.setVisible(False)
         self.batch_progress.setValue(0)
@@ -319,8 +330,8 @@ class MainWindow(QMainWindow):
         export_layout.addWidget(output_group)
         export_layout.addWidget(self.open_folder_toggle)
         export_layout.addLayout(actions_row)
-        export_layout.addWidget(self.progress)
         export_layout.addWidget(self.batch_progress_label)
+        export_layout.addWidget(self.progress)
         export_layout.addWidget(self.batch_progress)
         export_layout.addWidget(preview_label)
         export_layout.addWidget(self.preview, 1)
@@ -337,6 +348,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(splitter, 1)
 
         self.setCentralWidget(root)
+        self._set_progress_idle()
 
     def _load_saved_token(self) -> None:
         if not self.remember_token.isEnabled():
@@ -365,6 +377,31 @@ class MainWindow(QMainWindow):
             self.status_dot.setProperty("connected", connected)
             self.status_dot.style().unpolish(self.status_dot)
             self.status_dot.style().polish(self.status_dot)
+            self.connect_button.setText(self.tr("Reconnect") if connected else self.tr("Connect"))
+
+    def _set_connected_user_label(self, username: str | None) -> None:
+        if username:
+            self.connected_user_label.setText(self.tr("Connected as: {username}").format(username=username))
+            return
+        self.connected_user_label.setText(self.tr("Connected as: -"))
+
+    def _load_show_ids_tooltips_preference(self) -> None:
+        raw = self._settings.value("ui/show_ids_tooltips", None)
+        if raw is None:
+            self.show_ids_tooltips_toggle.setChecked(True)
+            return
+        if isinstance(raw, bool):
+            self.show_ids_tooltips_toggle.setChecked(raw)
+            return
+        if isinstance(raw, str):
+            self.show_ids_tooltips_toggle.setChecked(raw.strip().lower() in {"1", "true", "yes", "on"})
+            return
+        self.show_ids_tooltips_toggle.setChecked(bool(raw))
+
+    def on_show_ids_tooltips_toggled(self, checked: bool) -> None:
+        self._settings.setValue("ui/show_ids_tooltips", bool(checked))
+        self._settings.sync()
+        self._refresh_all_item_tooltips()
 
     def update_filter_controls(self) -> None:
         self.before_date.setEnabled(self.before_check.isChecked())
@@ -479,6 +516,47 @@ class MainWindow(QMainWindow):
 
     def _set_item_data(self, item: QTreeWidgetItem, payload: dict) -> None:
         item.setData(0, Qt.UserRole, payload)
+        self._apply_item_tooltip(item)
+
+    def _refresh_all_item_tooltips(self) -> None:
+        def visit(node: QTreeWidgetItem) -> None:
+            self._apply_item_tooltip(node)
+            for idx in range(node.childCount()):
+                visit(node.child(idx))
+
+        for i in range(self.tree.topLevelItemCount()):
+            visit(self.tree.topLevelItem(i))
+
+    def _apply_item_tooltip(self, item: QTreeWidgetItem) -> None:
+        if not self.show_ids_tooltips_toggle.isChecked():
+            item.setToolTip(0, "")
+            return
+        payload = self._item_data(item)
+        node_kind = payload.get("node_kind")
+        if node_kind == NODE_KIND_DM:
+            lines = []
+            channel_id = payload.get("channel_id")
+            if channel_id:
+                lines.append(self.tr("DM Channel ID: {id}").format(id=channel_id))
+            participant_ids = payload.get("participant_user_ids") or []
+            if participant_ids:
+                participant_text = ", ".join(str(pid) for pid in participant_ids)
+                lines.append(self.tr("Participant User IDs: {ids}").format(ids=participant_text))
+            item.setToolTip(0, "\n".join(lines))
+            return
+        if node_kind == NODE_KIND_SERVER:
+            guild_id = payload.get("guild_id")
+            item.setToolTip(0, self.tr("Guild ID: {id}").format(id=guild_id) if guild_id else "")
+            return
+        if node_kind == NODE_KIND_CHANNEL:
+            channel_id = payload.get("channel_id")
+            item.setToolTip(0, self.tr("Channel ID: {id}").format(id=channel_id) if channel_id else "")
+            return
+        if node_kind == NODE_KIND_CATEGORY:
+            category_id = payload.get("category_id")
+            item.setToolTip(0, self.tr("Category ID: {id}").format(id=category_id) if category_id else "")
+            return
+        item.setToolTip(0, "")
 
     def _set_parent_item_checkable(self, item: QTreeWidgetItem, payload: dict) -> None:
         flags = item.flags() | Qt.ItemIsSelectable | Qt.ItemIsEnabled | Qt.ItemIsUserCheckable
@@ -603,9 +681,13 @@ class MainWindow(QMainWindow):
         self._tree_syncing = True
         self._reset_icon_bindings()
         self.tree.clear()
+        self._dms_root_item = None
+        self._servers_root_item = None
         self._tree_syncing = False
         self.preview.clear()
         self._selected_targets = []
+        self._set_connected_user_label(None)
+        self._refresh_tree_counts()
         self._update_selection_ui()
 
         if self.remember_token.isChecked():
@@ -631,6 +713,7 @@ class MainWindow(QMainWindow):
 
     def on_conversation_error(self, message: str) -> None:
         self.set_status(message, connected=False)
+        self._set_connected_user_label(None)
         self.connect_button.setEnabled(True)
         self._logger.error("Conversation load failed: %s", message)
 
@@ -638,8 +721,11 @@ class MainWindow(QMainWindow):
         self._connected_user = payload.get("me")
         user_label = self._connected_user.get("username", "Unknown") if self._connected_user else "Unknown"
         self.set_status(f"Connected as {user_label}", connected=True)
-        dm_count = len(payload.get("dms", []))
-        guild_count = len(payload.get("guilds", []))
+        self._set_connected_user_label(user_label)
+        dm_entries = payload.get("dms", [])
+        guild_entries = payload.get("guilds", [])
+        dm_count = len(dm_entries)
+        guild_count = len(guild_entries)
         self._logger.info("Conversations loaded. DMs: %s, Guilds: %s", dm_count, guild_count)
 
         self._tree_syncing = True
@@ -647,21 +733,28 @@ class MainWindow(QMainWindow):
         self._reset_icon_bindings()
         self.tree.clear()
 
-        dms_root = QTreeWidgetItem(["Direct Messages"])
+        dms_root = QTreeWidgetItem([self.tr("Direct Messages (0)")])
         dms_root.setFlags((dms_root.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
         self._set_item_data(dms_root, {"node_kind": NODE_KIND_ROOT})
         self.tree.addTopLevelItem(dms_root)
+        self._dms_root_item = dms_root
 
-        for dm in payload.get("dms", []):
+        for dm in dm_entries:
             name = self._dm_name(dm)
             dm_item = QTreeWidgetItem([name])
             channel_id = dm.get("id")
             dm_icon_key, dm_icon_url = self._resolve_dm_icon(dm)
+            participant_ids = [
+                str(recipient.get("id"))
+                for recipient in (dm.get("recipients") or [])
+                if recipient.get("id")
+            ]
             dm_payload = {
                 "node_kind": NODE_KIND_DM,
                 "type": "dm",
                 "channel_id": channel_id,
                 "dm_name": name,
+                "participant_user_ids": participant_ids,
                 "stable_id": f"dm:{channel_id}" if channel_id else "",
                 "exportable": bool(channel_id),
             }
@@ -678,12 +771,13 @@ class MainWindow(QMainWindow):
                 dm_item.setText(0, f"{name} (unavailable)")
             dms_root.addChild(dm_item)
 
-        servers_root = QTreeWidgetItem(["Servers"])
+        servers_root = QTreeWidgetItem([self.tr("Servers (0)")])
         servers_root.setFlags((servers_root.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
         self._set_item_data(servers_root, {"node_kind": NODE_KIND_ROOT})
         self.tree.addTopLevelItem(servers_root)
+        self._servers_root_item = servers_root
 
-        for guild in payload.get("guilds", []):
+        for guild in guild_entries:
             guild_name = guild.get("name", "Unknown Server")
             guild_id = guild.get("id")
             guild_item = QTreeWidgetItem([guild_name])
@@ -805,6 +899,24 @@ class MainWindow(QMainWindow):
         for i in range(self.tree.topLevelItemCount()):
             root = self.tree.topLevelItem(i)
             self._filter_item(root, text)
+        self._refresh_tree_counts()
+
+    def _refresh_tree_counts(self) -> None:
+        if self._dms_root_item:
+            visible_dm_count = 0
+            for idx in range(self._dms_root_item.childCount()):
+                child = self._dms_root_item.child(idx)
+                if not child.isHidden() and self._is_exportable_leaf(child):
+                    visible_dm_count += 1
+            self._dms_root_item.setText(0, self.tr("Direct Messages ({count})").format(count=visible_dm_count))
+
+        if self._servers_root_item:
+            visible_guild_count = 0
+            for idx in range(self._servers_root_item.childCount()):
+                child = self._servers_root_item.child(idx)
+                if self._item_data(child).get("node_kind") == NODE_KIND_SERVER and not child.isHidden():
+                    visible_guild_count += 1
+            self._servers_root_item.setText(0, self.tr("Servers ({count})").format(count=visible_guild_count))
 
     def _filter_item(self, item: QTreeWidgetItem, text: str) -> bool:
         match = text in item.text(0).lower()
@@ -1078,10 +1190,8 @@ class MainWindow(QMainWindow):
 
         self._is_export_running = True
         self._update_selection_ui()
+        self._set_progress_active_single()
         self.cancel_button.setVisible(False)
-        self.batch_progress.setVisible(False)
-        self.batch_progress_label.setVisible(False)
-        self.progress.setRange(0, 0)
         self.preview.clear()
         self.set_status("Exporting...", connected=True)
         self._logger.info(
@@ -1107,15 +1217,10 @@ class MainWindow(QMainWindow):
         self._is_export_running = True
         self._batch_cancel_requested = False
         self._update_selection_ui()
-        self.progress.setRange(0, 0)
+        self._set_progress_active_batch(total=len(targets))
         self.preview.clear()
         self.cancel_button.setVisible(True)
         self.cancel_button.setEnabled(True)
-        self.batch_progress_label.setVisible(True)
-        self.batch_progress_label.setText("Batch Progress")
-        self.batch_progress.setVisible(True)
-        self.batch_progress.setRange(0, len(targets))
-        self.batch_progress.setValue(0)
         self.set_status(f"Batch export started ({len(targets)} items)", connected=True)
         self._logger.info("Batch export requested for %s items.", len(targets))
 
@@ -1129,12 +1234,19 @@ class MainWindow(QMainWindow):
         self._batch_worker.start()
 
     def on_batch_item_started(self, index: int, total: int, label: str) -> None:
-        self.batch_progress_label.setText(f"Exporting {index} of {total}: {label}")
+        self.batch_progress_label.setText(
+            self.tr("Batch export | Exporting {index} of {total}").format(index=index, total=total)
+        )
         self.preview.clear()
 
     def on_batch_progress(self, completed: int, total: int) -> None:
         self.batch_progress.setRange(0, total)
         self.batch_progress.setValue(completed)
+        percent = int((completed / total) * 100) if total else 0
+        self.progress.setRange(0, 100)
+        self.progress.setValue(percent)
+        self.progress.setTextVisible(True)
+        self.progress.setFormat("%p%")
 
     def on_cancel_batch(self) -> None:
         if not self._batch_worker or not self._batch_worker.isRunning():
@@ -1149,28 +1261,17 @@ class MainWindow(QMainWindow):
 
     def on_batch_error(self, message: str) -> None:
         self._is_export_running = False
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
+        self._set_progress_idle()
         self.cancel_button.setVisible(False)
-        self.batch_progress_label.setVisible(False)
-        self.batch_progress.setVisible(False)
         self.set_status(message, connected=True)
         self._logger.error("Batch export failed: %s", message)
         self._update_selection_ui()
 
     def on_batch_finished(self, result: BatchExportResult) -> None:
         self._is_export_running = False
-        self.progress.setRange(0, 100)
-        self.progress.setValue(100)
+        self._set_progress_idle()
         self.cancel_button.setVisible(False)
         self.cancel_button.setEnabled(True)
-        self.batch_progress_label.setVisible(True)
-        self.batch_progress_label.setText(
-            f"Batch complete: {result.succeeded} succeeded, {result.failed} failed"
-        )
-        self.batch_progress.setVisible(True)
-        self.batch_progress.setRange(0, max(result.attempted, 1))
-        self.batch_progress.setValue(result.attempted)
         if result.cancelled:
             self._logger.warning(
                 "Batch export cancelled. Attempted=%s, succeeded=%s, failed=%s",
@@ -1206,22 +1307,16 @@ class MainWindow(QMainWindow):
 
     def on_export_error(self, message: str) -> None:
         self._is_export_running = False
-        self.progress.setRange(0, 100)
-        self.progress.setValue(0)
+        self._set_progress_idle()
         self.cancel_button.setVisible(False)
-        self.batch_progress.setVisible(False)
-        self.batch_progress_label.setVisible(False)
         self.set_status(message, connected=True)
         self._logger.error("Export failed: %s", message)
         self._update_selection_ui()
 
     def on_export_finished(self, result) -> None:
         self._is_export_running = False
-        self.progress.setRange(0, 100)
-        self.progress.setValue(100)
+        self._set_progress_idle()
         self.cancel_button.setVisible(False)
-        self.batch_progress.setVisible(False)
-        self.batch_progress_label.setVisible(False)
         status_parts = ["Export complete"]
         if result.json_path:
             status_parts.append(f"JSON: {result.json_path}")
@@ -1316,6 +1411,41 @@ class MainWindow(QMainWindow):
             self.set_status("Token must be a single line with no spaces.", connected=False)
             return None
         return token
+
+    def _set_progress_idle(self) -> None:
+        self.batch_progress_label.setVisible(False)
+        self.batch_progress_label.setText("")
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        self.progress.setVisible(False)
+        self.batch_progress.setVisible(False)
+        self.batch_progress.setRange(0, 1)
+        self.batch_progress.setValue(0)
+        self.batch_progress.setFormat("%v / %m")
+
+    def _set_progress_active_single(self) -> None:
+        self.batch_progress_label.setVisible(True)
+        self.batch_progress_label.setText(self.tr("Single export | Exporting 1 of 1"))
+        self.progress.setVisible(True)
+        self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)
+        self.batch_progress.setVisible(False)
+
+    def _set_progress_active_batch(self, *, total: int) -> None:
+        self.batch_progress_label.setVisible(True)
+        self.batch_progress_label.setText(
+            self.tr("Batch export | Exporting 0 of {total}").format(total=total)
+        )
+        self.progress.setVisible(True)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(True)
+        self.progress.setFormat("%p%")
+        self.batch_progress.setVisible(True)
+        self.batch_progress.setRange(0, total)
+        self.batch_progress.setValue(0)
+        self.batch_progress.setFormat("%v / %m")
 
 
 def run() -> None:
