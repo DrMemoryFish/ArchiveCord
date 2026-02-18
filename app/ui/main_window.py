@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDateEdit,
     QFileDialog,
+    QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -20,6 +22,8 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QMenu,
+    QScrollArea,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QTimeEdit,
@@ -215,9 +219,21 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
 
         export_tab = QWidget()
-        export_layout = QVBoxLayout(export_tab)
+        export_tab_layout = QVBoxLayout(export_tab)
+        export_tab_layout.setSpacing(0)
+        export_tab_layout.setContentsMargins(0, 0, 0, 0)
+
+        export_scroll = QScrollArea()
+        export_scroll.setWidgetResizable(True)
+        export_scroll.setFrameShape(QFrame.NoFrame)
+        export_tab_layout.addWidget(export_scroll)
+
+        export_contents = QWidget()
+        export_layout = QVBoxLayout(export_contents)
         export_layout.setSpacing(12)
         export_layout.setContentsMargins(8, 8, 8, 8)
+        export_scroll.setWidget(export_contents)
+
         filters_group = QGroupBox("Export Filters")
         filters_layout = QVBoxLayout(filters_group)
         filters_layout.setSpacing(8)
@@ -258,7 +274,7 @@ class MainWindow(QMainWindow):
 
         options_group = QGroupBox("Export Options")
         options_layout = QVBoxLayout(options_group)
-        options_layout.setSpacing(6)
+        options_layout.setSpacing(8)
 
         self.export_json = QCheckBox("Export JSON")
         self.export_txt = QCheckBox("Export formatted TXT")
@@ -272,12 +288,26 @@ class MainWindow(QMainWindow):
         self.include_pins.setChecked(True)
         self.include_replies.setChecked(True)
 
-        options_layout.addWidget(self.export_json)
-        options_layout.addWidget(self.export_txt)
-        options_layout.addWidget(self.export_attachments)
-        options_layout.addWidget(self.include_edits)
-        options_layout.addWidget(self.include_pins)
-        options_layout.addWidget(self.include_replies)
+        formats_layout = QGridLayout()
+        formats_layout.setHorizontalSpacing(12)
+        formats_layout.addWidget(self.export_txt, 0, 0)
+        formats_layout.addWidget(self.export_json, 0, 1)
+        formats_layout.addWidget(self.export_attachments, 1, 0)
+        formats_layout.setColumnStretch(0, 1)
+        formats_layout.setColumnStretch(1, 1)
+        options_layout.addLayout(formats_layout)
+
+        transcript_details_label = QLabel("Transcript details")
+        options_layout.addWidget(transcript_details_label)
+
+        transcript_details_container = QWidget()
+        transcript_details_layout = QVBoxLayout(transcript_details_container)
+        transcript_details_layout.setContentsMargins(20, 0, 0, 0)
+        transcript_details_layout.setSpacing(4)
+        transcript_details_layout.addWidget(self.include_edits)
+        transcript_details_layout.addWidget(self.include_pins)
+        transcript_details_layout.addWidget(self.include_replies)
+        options_layout.addWidget(transcript_details_container)
 
         output_group = QGroupBox("Output")
         output_layout = QVBoxLayout(output_group)
@@ -338,15 +368,33 @@ class MainWindow(QMainWindow):
         preview_label = QLabel("Output Preview")
         self.preview = QPlainTextEdit()
         self.preview.setReadOnly(True)
+        self.preview.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.preview.setMinimumHeight(160)
 
-        export_layout.addWidget(filters_group)
-        export_layout.addWidget(options_group)
+        filters_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        options_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        output_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+
+        top_row_layout = QGridLayout()
+        top_row_layout.setHorizontalSpacing(12)
+        top_row_layout.setColumnStretch(0, 1)
+        top_row_layout.setColumnStretch(1, 1)
+        top_row_layout.addWidget(filters_group, 0, 0)
+        top_row_layout.addWidget(options_group, 0, 1)
+
+        action_block = QWidget()
+        action_block_layout = QVBoxLayout(action_block)
+        action_block_layout.setContentsMargins(0, 0, 0, 0)
+        action_block_layout.setSpacing(6)
+        action_block_layout.addWidget(self.open_folder_toggle)
+        action_block_layout.addLayout(actions_row)
+        action_block_layout.addWidget(self.batch_progress_label)
+        action_block_layout.addWidget(self.progress)
+        action_block_layout.addWidget(self.batch_progress)
+
+        export_layout.addLayout(top_row_layout)
         export_layout.addWidget(output_group)
-        export_layout.addWidget(self.open_folder_toggle)
-        export_layout.addLayout(actions_row)
-        export_layout.addWidget(self.batch_progress_label)
-        export_layout.addWidget(self.progress)
-        export_layout.addWidget(self.batch_progress)
+        export_layout.addWidget(action_block)
         export_layout.addWidget(preview_label)
         export_layout.addWidget(self.preview, 1)
 
