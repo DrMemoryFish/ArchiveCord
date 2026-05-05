@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from typing import Callable, Dict, Optional, Tuple
 
@@ -144,6 +145,10 @@ def execute_export(
             attachments_saved = export_attachments(messages_sorted, attachments_dir)
 
         metadata = {
+            "package": {
+                "export_dir_name": os.path.basename(paths.export_dir),
+                "export_dir": paths.export_dir,
+            },
             "export_started_at": export_started_at.isoformat(),
             "filters": {
                 "after": options.after_dt.isoformat() if options.after_dt else None,

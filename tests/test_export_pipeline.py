@@ -61,7 +61,7 @@ class ExportPipelineTests(unittest.TestCase):
                 result = execute_export(
                     "token",
                     options,
-                    export_started_at=datetime(2026, 5, 5, 10, 30, 45),
+                    export_started_at=datetime(2026, 5, 5, 10, 30, 45, 123456),
                 )
 
             self.assertTrue(result.txt_path.endswith(os.path.join("messages.txt")))
@@ -77,6 +77,11 @@ class ExportPipelineTests(unittest.TestCase):
             self.assertEqual(metadata["target"]["channel"]["id"], "333")
             self.assertEqual(metadata["artifacts"]["txt"], "messages.txt")
             self.assertEqual(metadata["message_count"], 1)
+            self.assertEqual(
+                metadata["package"]["export_dir_name"],
+                "export_20260505_103045_123456",
+            )
+            self.assertEqual(metadata["package"]["export_dir"], result.export_dir)
 
     def test_attachment_export_uses_attachment_id_to_avoid_collisions(self) -> None:
         from app.core.exporter import export_attachments

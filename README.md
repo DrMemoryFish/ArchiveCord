@@ -194,9 +194,10 @@ Platform examples:
 If you set a custom output directory in the UI, that value is persisted and reused on next launch.
 
 Internal export structure:
-- DMs: `DMs/<DM Name [channel_id]>/export_<timestamp>/`
-- Server channels: `Servers/<Server Name [guild_id]>/<Category Name [category_id]>/<Channel Name [channel_id]>/export_<timestamp>/`
+- DMs: `DMs/<DM Name [channel_id]>/export_YYYYMMDD_HHMMSS_microseconds/`
+- Server channels: `Servers/<Server Name [guild_id]>/<Category Name [category_id]>/<Channel Name [channel_id]>/export_YYYYMMDD_HHMMSS_microseconds/`
 - Each export package contains `metadata.json`, optional `messages.txt`, optional `messages.json`, and optional `attachments/`
+- `metadata.json` includes package identity: `package.export_dir_name` and `package.export_dir`.
 - Category folders are omitted for uncategorized channels.
 
 Before starting an export, the app verifies export/log directories are writable. Export is blocked if checks fail.
@@ -208,7 +209,7 @@ Filters are optional and use your local timezone.
 
 ## Export Package and TXT Format
 Example package:
-- `Servers/My Server [guild_111]/Work [category_222]/general [channel_333]/export_20260211_153500/messages.txt`
+- `Servers/My Server [guild_111]/Work [category_222]/general [channel_333]/export_20260211_153500_123456/messages.txt`
 
 TXT excerpt:
 ```text

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.core.models import ExportOptions
-from app.core.utils import sanitize_path_segment
 
 
 WINDOWS_RESERVED_NAMES = {
@@ -46,8 +45,9 @@ class ExportPaths:
 
 
 def _clean_segment(value: str, fallback: str) -> str:
-    cleaned = sanitize_path_segment(value)
-    if cleaned.lower() == "file":
+    raw = (value or "").strip()
+    cleaned = re.sub(r'[<>:"/\\\\|?*]+', "_", raw).strip(" .")
+    if not cleaned:
         cleaned = fallback
     if cleaned.upper() in WINDOWS_RESERVED_NAMES:
         cleaned = f"{cleaned}_"
@@ -92,7 +92,7 @@ def build_export_paths(options: ExportOptions, *, export_started_at: datetime) -
         parts.append(channel_segment)
         conversation_dir = os.path.join(*parts)
 
-    export_dir_name = f"export_{export_started_at.strftime('%Y%m%d_%H%M%S')}"
+    export_dir_name = f"export_{export_started_at.strftime('%Y%m%d_%H%M%S_%f')}"
     if options.export_label.strip():
         export_dir_name = f"{export_dir_name}_{_slugify_label(options.export_label)}"
 
