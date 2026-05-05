@@ -12,9 +12,15 @@ The interface must not look or behave like a SaaS dashboard, web app, developer 
 
 Every visible element must support that sentence. If an element does not help the user connect, select conversations, review export settings, export, monitor progress, recover from failure, or adjust defaults, it should be hidden one layer deeper.
 
-## Required UI states and docs
+## How to use this folder
 
-Read these files in order before implementing anything:
+Read the files in order. Do not implement from only one file.
+
+The early files define product direction and visual system. The later files convert that direction into state machines, component contracts, migration steps, QA checks, and implementation tokens.
+
+If the written specification conflicts with a concept image, the written specification wins.
+
+## Required UI/UX docs
 
 1. `00-design-system.md`  
    Shared colors, typography, spacing, shape language, status language, controls, motion, and accessibility requirements.
@@ -32,13 +38,34 @@ Read these files in order before implementing anything:
    Export in progress. Covers the activity tray, per-job status rows, running/queued/complete/failed states, cancellation, and attachment preview expansion.
 
 6. `05-export-complete.md`  
-   Successful and partially failed completion states. Covers completion summaries, actions, export result rows, and failure recovery.
+   Successful, partial-failure, all-failed, and cancelled completion states. Covers completion summaries, actions, export result rows, and failure recovery.
 
 7. `06-settings.md`  
    Settings surface. Covers account/token management, appearance, export defaults, activity/previews, diagnostics, and about.
 
 8. `07-implementation-guardrails.md`  
    Non-negotiable implementation rules, forbidden UI patterns, PySide implementation notes, and acceptance checklist.
+
+9. `08-state-machine.md`  
+   Formal workflow states, allowed transitions, visible surfaces per state, disabled rules, and export-run snapshot behavior.
+
+10. `09-component-contracts.md`  
+    Required/recommended UI components, component responsibilities, view models, emitted events, and ownership rules.
+
+11. `10-current-ui-migration-map.md`  
+    Current PySide UI mapped to target UI, including what moves, what stays, what changes, and which behaviors must be preserved.
+
+12. `11-implementation-phases.md`  
+    Safe phased implementation plan. Use this to avoid a risky one-shot rewrite.
+
+13. `12-qa-acceptance-tests.md`  
+    Manual and command-based QA checks for connection, selection, export, activity, completion, settings, accessibility, and regressions.
+
+14. `13-theme-tokens.md`  
+    Implementation-oriented semantic tokens for colors, spacing, radius, typography, sizes, and QSS mapping.
+
+15. `assets/README.md`  
+    Reference image handling notes and the expected six-panel concept-board asset name.
 
 ## Global UX rules
 
@@ -55,14 +82,17 @@ Read these files in order before implementing anything:
 
 ## Main app states
 
-The app has six user-facing states:
+The app has these user-facing states:
 
 - Not connected / connect state
+- Connecting
 - Connected with no selection
 - Ready to export
 - Conversation selector open
 - Export in progress
-- Export complete or complete with issues
+- Export complete
+- Export finished with issues
+- Export failed
 - Settings opened as a secondary surface
 
 These are states of one product, not unrelated pages.
@@ -94,4 +124,16 @@ The current PySide UI has a top token bar, permanent conversation tree, right-si
 - activity tray instead of full dashboard by default
 - logs inside Settings > Diagnostics or export details
 
-Current backend behavior and export architecture should not be broken by UI changes.
+Current backend behavior and export architecture must not be broken by UI changes.
+
+## Build-readiness rule
+
+Do not start implementation from this folder until these are understood:
+
+- `08-state-machine.md`
+- `09-component-contracts.md`
+- `10-current-ui-migration-map.md`
+- `11-implementation-phases.md`
+- `12-qa-acceptance-tests.md`
+
+These files turn the design direction into implementation constraints.
