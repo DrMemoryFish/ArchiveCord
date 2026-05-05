@@ -2,7 +2,6 @@
 
 import logging
 import os
-from datetime import datetime
 
 from PySide6.QtCore import QDate, QSettings, QTime, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QIcon
@@ -46,7 +45,7 @@ from app.core.icon_cache import (
 )
 from app.core.paths import ensure_writable_directory, resolve_default_paths
 from app.core.token_store import TokenStoreError, delete_token, keyring_available, load_token, save_token
-from app.core.utils import build_dt, ensure_dir, sanitize_path_segment
+from app.core.utils import build_dt
 from app.ui.log_tab import LogTab
 from app.workers.batch_export_worker import BatchExportResult, BatchExportTarget, BatchExportWorker
 from app.workers.conversation_worker import ConversationWorker
@@ -356,7 +355,7 @@ class MainWindow(QMainWindow):
         self.output_dir_resolved_label = QLabel("Resolved path:")
 
         self.base_filename_input = QLineEdit()
-        self.base_filename_input.setPlaceholderText("Filename suffix (optional)")
+        self.base_filename_input.setPlaceholderText("Export label (optional)")
         self.base_filename_input.setText("")
 
         output_layout.addLayout(output_dir_row)
@@ -939,12 +938,19 @@ class MainWindow(QMainWindow):
                 channel_name = channel.get("name") or "unnamed"
                 channel_id = channel.get("id")
                 parent_id = channel.get("parent_id")
+                category_parent = category_items.get(str(parent_id)) if parent_id else None
                 channel_item = QTreeWidgetItem([f"# {channel_name}"])
                 channel_payload = {
                     "node_kind": NODE_KIND_CHANNEL,
                     "type": "guild",
                     "guild_id": guild_id,
                     "guild_name": guild_name,
+                    "category_id": str(parent_id) if parent_id else None,
+                    "category_name": (
+                        category_parent.text(0)
+                        if category_parent
+                        else None
+                    ),
                     "channel_id": channel_id,
                     "channel_name": channel_name,
                     "stable_id": f"channel:{channel_id}" if channel_id else "",
@@ -956,7 +962,6 @@ class MainWindow(QMainWindow):
                     self._set_item_unavailable(channel_item, channel_payload)
                     channel_item.setText(0, f"# {channel_name} (unavailable)")
 
-                category_parent = category_items.get(str(parent_id)) if parent_id else None
                 if category_parent:
                     category_parent.addChild(channel_item)
                 else:
@@ -1260,8 +1265,6 @@ class MainWindow(QMainWindow):
 
         batch_targets: list[BatchExportTarget] = []
         for target in targets:
-            output_dir, base_filename = self._build_export_target(target, output_root)
-            ensure_dir(output_dir)
             options = ExportOptions(
                 channel_id=target.get("channel_id"),
                 before_dt=before_dt,
@@ -1272,8 +1275,15 @@ class MainWindow(QMainWindow):
                 include_edits=self.include_edits.isChecked(),
                 include_pins=self.include_pins.isChecked(),
                 include_replies=self.include_replies.isChecked(),
-                output_dir=output_dir,
-                base_filename=base_filename,
+                output_root=output_root,
+                target_kind=target.get("type") or "guild",
+                dm_name=target.get("dm_name"),
+                guild_id=target.get("guild_id"),
+                guild_name=target.get("guild_name"),
+                category_id=target.get("category_id"),
+                category_name=target.get("category_name"),
+                channel_name=target.get("channel_name"),
+                export_label=self.base_filename_input.text().strip(),
             )
             label = (
                 target.get("dm_name")
@@ -1406,13 +1416,7 @@ class MainWindow(QMainWindow):
         self.set_status(status)
 
         if self.open_folder_toggle.isChecked() and result.last_success:
-            target = (
-                result.last_success.txt_path
-                or result.last_success.json_path
-                or result.last_success.attachments_dir
-            )
-            if target:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(target)))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(result.last_success.export_dir))
 
         self._update_selection_ui()
 
@@ -1435,48 +1439,12 @@ class MainWindow(QMainWindow):
             status_parts.append(f"TXT: {result.txt_path}")
         if result.attachments_dir:
             status_parts.append(f"Attachments: {result.attachments_saved}")
+        status_parts.append(f"Folder: {result.export_dir}")
         self.set_status(" | ".join(status_parts))
         self._logger.info("Export completed successfully.")
         if self.open_folder_toggle.isChecked():
-            target = result.txt_path or result.json_path or result.attachments_dir
-            if target:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(target)))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(result.export_dir))
         self._update_selection_ui()
-
-    def _build_export_target(self, selection: dict, output_root: str) -> tuple[str, str]:
-        chat_type = selection.get("type")
-        if chat_type == "dm":
-            dm_name = selection.get("dm_name") or "Direct Message"
-            chat_label = dm_name
-            output_dir = os.path.join(output_root, "DMs", sanitize_path_segment(dm_name))
-        else:
-            guild_name = selection.get("guild_name") or "Server"
-            channel_name = selection.get("channel_name") or "channel"
-            chat_label = f"{guild_name} #{channel_name}"
-            output_dir = os.path.join(
-                output_root,
-                "Servers",
-                sanitize_path_segment(guild_name),
-                sanitize_path_segment(channel_name),
-            )
-
-        parts = [sanitize_path_segment(chat_label)]
-
-        date_part = self._build_date_part()
-        time_part = self._build_time_part()
-        if date_part:
-            parts.append(date_part)
-        if time_part:
-            parts.append(time_part)
-
-        exported_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        parts.append(f"[Exported {exported_stamp}]")
-
-        suffix = self.base_filename_input.text().strip()
-        if suffix:
-            parts.insert(1, sanitize_path_segment(suffix))
-        base_filename = " ".join(parts)
-        return output_dir, base_filename
     def _build_date_part(self) -> str:
         if not (self.before_check.isChecked() or self.after_check.isChecked()):
             return ""

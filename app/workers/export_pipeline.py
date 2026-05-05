@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import logging
-import os
+from datetime import datetime
 from typing import Callable, Dict, Optional, Tuple
 
 from app.core.discord_client import DiscordClient
+from app.core.export_paths import build_export_paths
 from app.core.exporter import export_attachments, save_json, save_txt
 from app.core.formatter import format_message
 from app.core.models import ExportOptions, ExportResult
+from app.core.utils import ensure_dir
 from app.core.utils import parse_discord_timestamp
 
 
@@ -39,12 +41,14 @@ def execute_export(
     token: str,
     options: ExportOptions,
     *,
+    export_started_at: Optional[datetime] = None,
     status_callback: Optional[StatusCallback] = None,
     preview_callback: Optional[PreviewCallback] = None,
     cancel_check: Optional[CancelCallback] = None,
 ) -> ExportResult:
     client = None
     logger = logging.getLogger("discordsorter.export")
+    export_started_at = export_started_at or datetime.now()
     try:
         client = DiscordClient(token)
         _emit_status(status_callback, "Validating token...")
@@ -118,6 +122,9 @@ def execute_export(
         formatted_text = "\n\n".join(blocks)
         _emit_preview(preview_callback, formatted_text)
 
+        paths = build_export_paths(options, export_started_at=export_started_at)
+        ensure_dir(paths.export_dir)
+
         json_path = None
         txt_path = None
         attachments_dir = None
@@ -125,28 +132,65 @@ def execute_export(
 
         if options.export_json:
             _check_cancel(cancel_check)
-            json_path = save_json(
-                messages_sorted,
-                os.path.join(options.output_dir, f"{options.base_filename}.json"),
-            )
+            json_path = save_json(messages_sorted, paths.json_path)
 
         if options.export_txt:
             _check_cancel(cancel_check)
-            txt_path = save_txt(
-                formatted_text,
-                os.path.join(options.output_dir, f"{options.base_filename}.txt"),
-            )
+            txt_path = save_txt(formatted_text, paths.txt_path)
 
         if options.export_attachments:
             _check_cancel(cancel_check)
-            attachments_dir = os.path.join(
-                options.output_dir, f"{options.base_filename}_attachments"
-            )
+            attachments_dir = paths.attachments_dir
             attachments_saved = export_attachments(messages_sorted, attachments_dir)
+
+        metadata = {
+            "export_started_at": export_started_at.isoformat(),
+            "filters": {
+                "after": options.after_dt.isoformat() if options.after_dt else None,
+                "before": options.before_dt.isoformat() if options.before_dt else None,
+                "include_edits": options.include_edits,
+                "include_pins": options.include_pins,
+                "include_replies": options.include_replies,
+            },
+            "target": {
+                "kind": options.target_kind,
+                "dm": {
+                    "name": options.dm_name,
+                }
+                if options.target_kind == "dm"
+                else None,
+                "guild": {
+                    "id": options.guild_id,
+                    "name": options.guild_name,
+                }
+                if options.target_kind != "dm"
+                else None,
+                "category": {
+                    "id": options.category_id,
+                    "name": options.category_name,
+                }
+                if options.target_kind != "dm" and options.category_id
+                else None,
+                "channel": {
+                    "id": options.channel_id,
+                    "name": options.channel_name or options.dm_name,
+                },
+            },
+            "artifacts": {
+                "txt": "messages.txt" if options.export_txt else None,
+                "json": "messages.json" if options.export_json else None,
+                "attachments": "attachments" if options.export_attachments else None,
+            },
+            "message_count": len(messages_sorted),
+            "attachment_count": sum(len(message.get("attachments") or []) for message in messages_sorted),
+            "export_label": options.export_label or None,
+        }
+        metadata_path = save_json(metadata, paths.metadata_path)
 
         _emit_status(status_callback, "Export complete.")
         logger.info(
-            "Export finished. JSON=%s TXT=%s Attachments=%s",
+            "Export finished. Dir=%s JSON=%s TXT=%s Attachments=%s",
+            paths.export_dir,
             json_path or "none",
             txt_path or "none",
             attachments_dir or "none",
@@ -154,8 +198,10 @@ def execute_export(
         return ExportResult(
             formatted_text=formatted_text,
             messages=messages_sorted,
+            export_dir=paths.export_dir,
             json_path=json_path,
             txt_path=txt_path,
+            metadata_path=metadata_path,
             attachments_dir=attachments_dir,
             attachments_saved=attachments_saved,
         )

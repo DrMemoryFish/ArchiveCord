@@ -2,7 +2,7 @@
 
 import json
 import os
-from typing import Iterable
+from typing import Any, Iterable
 
 import logging
 import requests
@@ -10,10 +10,10 @@ import requests
 from .utils import ensure_dir, safe_filename
 
 
-def save_json(messages: list, path: str) -> str:
+def save_json(payload: Any, path: str) -> str:
     ensure_dir(os.path.dirname(path))
     with open(path, "w", encoding="utf-8") as handle:
-        json.dump(messages, handle, ensure_ascii=False, indent=2)
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
     return path
 
 
@@ -36,7 +36,8 @@ def export_attachments(messages: Iterable[dict], folder: str) -> int:
             if not url:
                 continue
             filename = safe_filename(attachment.get("filename") or "attachment")
-            target = os.path.join(folder, f"{message.get('id')}_{filename}")
+            attachment_id = attachment.get("id") or "attachment"
+            target = os.path.join(folder, f"{message.get('id')}_{attachment_id}_{filename}")
             if os.path.exists(target):
                 continue
             try:

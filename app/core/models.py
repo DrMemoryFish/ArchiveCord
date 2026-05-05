@@ -25,15 +25,24 @@ class ExportOptions:
     include_edits: bool
     include_pins: bool
     include_replies: bool
-    output_dir: str
-    base_filename: str
+    output_root: str
+    target_kind: str
+    dm_name: Optional[str]
+    guild_id: Optional[str]
+    guild_name: Optional[str]
+    category_id: Optional[str]
+    category_name: Optional[str]
+    channel_name: Optional[str]
+    export_label: str
 
 
 @dataclass(frozen=True)
 class ExportResult:
     formatted_text: str
     messages: list
+    export_dir: str
     json_path: Optional[str]
     txt_path: Optional[str]
+    metadata_path: str
     attachments_dir: Optional[str]
     attachments_saved: int
